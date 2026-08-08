@@ -147,17 +147,26 @@ def warm(conn: sqlite3.Connection, request: SearchRequest) -> dict[str, Any]:
     pairs = sorted(route_pairs(request))
     months = _months_for(request)
     warnings: list[str] = []
-    counts: dict[tuple[str, str, str], int] = {}
+    outcome = cached.FetchOutcome(counts={}, failures={})
     try:
-        counts = cached.ensure_routes(conn, pairs, months, currency=request.currency)
+        outcome = cached.ensure_routes(conn, pairs, months, currency=request.currency)
     except cached.MissingToken as exc:
         warnings.append(str(exc))
 
-    empty = [f"{o}→{d}" for (o, d, _), n in counts.items() if n == 0]
+    if outcome.failures:
+        # Name them. "搜尋沒有成功" with no detail is the same dead end as a
+        # blank price cell — the user can't tell a throttled route from a
+        # route with no cheap flights.
+        warnings.append(
+            f"以下航線這次沒抓成功(其餘航線的價格仍然可用,稍後重試即可):"
+            f"{', '.join(outcome.failed_routes)}"
+        )
+
     return {
-        "routes_fetched": len(counts),
-        "rows": sum(counts.values()),
-        "empty_routes": sorted(set(empty)),
+        "routes_fetched": len(outcome.counts),
+        "rows": outcome.rows,
+        "empty_routes": outcome.empty_routes,
+        "failed_routes": outcome.failed_routes,
         "months": months,
         "warnings": warnings,
     }

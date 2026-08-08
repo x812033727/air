@@ -110,6 +110,26 @@ def months_covering(dates: Iterable[date]) -> list[str]:
     return sorted({d.strftime("%Y-%m") for d in dates})
 
 
+@dataclass(frozen=True)
+class FetchOutcome:
+    """What a warming pass actually achieved, successes and failures alike."""
+
+    counts: dict[tuple[str, str, str], int]
+    failures: dict[tuple[str, str, str], str]
+
+    @property
+    def rows(self) -> int:
+        return sum(self.counts.values())
+
+    @property
+    def empty_routes(self) -> list[str]:
+        return sorted({f"{o}→{d}" for (o, d, _), n in self.counts.items() if n == 0})
+
+    @property
+    def failed_routes(self) -> list[str]:
+        return sorted({f"{o}→{d}" for (o, d, _) in self.failures})
+
+
 def ensure_routes(
     conn: sqlite3.Connection,
     pairs: Sequence[tuple[str, str]],
@@ -118,12 +138,22 @@ def ensure_routes(
     currency: str | None = None,
     client: httpx.Client | None = None,
     force: bool = False,
-) -> dict[tuple[str, str, str], int]:
+) -> FetchOutcome:
     """Fetch every (route, month) that isn't already cached and fresh.
 
-    Returns row counts keyed by (origin, destination, month) — including the
-    zeros, which is the whole point: a caller needs to distinguish "we looked
-    and there was nothing" from "we never looked".
+    Commits after **each** route-month, and keeps going when one fails. Both
+    parts matter for a pass that makes 20–40 sequential upstream calls:
+
+    * A single commit at the end means one 429 on the last route throws away
+      all the earlier writes, so the retry re-fetches everything and spends
+      the quota twice — and the ``fetch_log`` row recording the failure is
+      rolled back with it, blinding the health endpoint to the very failure
+      mode it exists to catch.
+    * Aborting the loop means one bad route denies prices for every other
+      route in the search.
+
+    Row counts come back including the zeros, because a caller has to tell
+    "we looked and there was nothing" from "we never looked".
     """
     currency = currency or settings.default_currency
     if not settings.travelpayouts_token:
@@ -135,6 +165,7 @@ def ensure_routes(
     owns_client = client is None
     client = client or httpx.Client(timeout=settings.request_timeout_s)
     counts: dict[tuple[str, str, str], int] = {}
+    failures: dict[tuple[str, str, str], str] = {}
     try:
         for origin, destination in pairs:
             for month in months:
@@ -142,14 +173,20 @@ def ensure_routes(
                 if not force and _is_fresh(conn, origin, destination, month, currency):
                     counts[key] = _cached_row_count(conn, origin, destination, month, currency)
                     continue
-                counts[key] = _fetch_route_month(
-                    conn, client, origin, destination, month, currency
-                )
-        conn.commit()
+                try:
+                    counts[key] = _fetch_route_month(
+                        conn, client, origin, destination, month, currency
+                    )
+                except Exception as exc:  # noqa: BLE001 — recorded, not swallowed
+                    failures[key] = f"{type(exc).__name__}: {exc}"
+                finally:
+                    # Whatever happened — a stored month or a logged error —
+                    # it is durable before the next route is attempted.
+                    conn.commit()
     finally:
         if owns_client:
             client.close()
-    return counts
+    return FetchOutcome(counts=counts, failures=failures)
 
 
 def _is_fresh(
@@ -213,6 +250,10 @@ def _fetch_route_month(
             duration_ms=int((time.perf_counter() - started) * 1000),
             error=f"{type(exc).__name__}: {exc}",
         )
+        # Commit the log row before unwinding. Without this the record of the
+        # failure is rolled back along with the transaction, and /api/health
+        # reports a source that has never had a problem.
+        conn.commit()
         raise
 
     points = parse_month_payload(endpoint, payload, origin, destination, currency)
