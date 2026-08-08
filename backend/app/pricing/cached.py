@@ -369,8 +369,16 @@ def parse_month_payload(
                 continue
             points.append(
                 PricePoint(
-                    origin=entry.get("origin") or origin,
-                    destination=entry.get("destination") or destination,
+                    # Key on what we asked for, not what came back. Aviasales
+                    # answers a request for KIX with `destination: "OSA"` and a
+                    # request for NRT with `"TYO"` — the echo is a city label,
+                    # but the rows really are airport-specific (TPE→NRT and
+                    # TPE→HND share not one price for the same month). Storing
+                    # the echoed city means every lookup for an airport code
+                    # misses, and the whole site reads 「此航段查無資料」 while
+                    # sitting on the data.
+                    origin=origin,
+                    destination=destination,
                     depart_date=depart,
                     price=float(price),
                     currency=currency,
@@ -391,8 +399,9 @@ def parse_month_payload(
                 continue
             points.append(
                 PricePoint(
-                    origin=entry.get("origin") or origin,
-                    destination=entry.get("destination") or destination,
+                    # Same reasoning as month-matrix above: key on the request.
+                    origin=origin,
+                    destination=destination,
                     depart_date=depart,
                     price=float(price),
                     currency=currency,

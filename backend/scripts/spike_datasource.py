@@ -111,56 +111,72 @@ class Probe:
 # --------------------------------------------------------------------------
 
 def s1_one_way_semantics(probe: Probe, origin: str, month: str) -> list[str]:
+    """回傳的每日價到底是不是單程價。
+
+    先前這裡是用「帶 return_date vs 不帶」的價差來判斷,那是錯的方法:實測兩者
+    回傳完全相同(30 列、最低價一模一樣),而正確的解讀是**這個參數被忽略了**,
+    不是「不帶參數時回的是來回價」。舊版邏輯會從相同的數字推出相反的結論。
+
+    真正的證據在每一列裡:`return_date` 是不是空的。空的就是單程。
+    """
     lines = [
         "## S1a — 單程語義",
         "",
-        "問題:不帶 `return_date` 回來的每日價,到底是單程價還是錨在來回票上?",
-        "若是後者,拼票總價會系統性高估,而且看起來完全合理。",
+        "問題:回傳的每日價是單程價,還是錨在來回票上?若是後者,拼票總價會系統性",
+        "高估,而且看起來完全合理、不會有任何地方報錯。",
         "",
-        "| 端點 | 航線 | 帶 return_date | 回傳列數 | 最低價 | 中位價 |",
-        "| --- | --- | --- | ---: | ---: | ---: |",
+        "判準看的是**每一列自己帶的 `return_date`**,不是「帶不帶參數的價差」——",
+        "後者測不出東西,因為這個端點根本忽略該參數(帶與不帶回傳完全相同)。",
+        "",
+        "| 端點 | 航線 | 總列數 | 空 return_date | 帶回程日期 | 最低價 | 中位價 |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     verdict: list[str] = []
 
-    for endpoint_name, call in (("month-matrix", probe.month_matrix), ("calendar", probe.calendar)):
-        summary: dict[bool, tuple[int, float | None, float | None]] = {}
-        for with_return in (False, True):
-            extra = {"return_date": f"{month}-15"} if with_return else {}
-            status, payload, _ = call(origin, "KIX", month, **extra)
-            if status != 200 or not payload:
-                lines.append(
-                    f"| {endpoint_name} | {origin}→KIX | {'是' if with_return else '否'} "
-                    f"| HTTP {status} | – | – |"
-                )
-                continue
-            points = parse_month_payload(endpoint_name, payload, origin, "KIX", probe.currency)
-            prices = sorted(p.price for p in points)
-            low = prices[0] if prices else None
-            mid = prices[len(prices) // 2] if prices else None
-            summary[with_return] = (len(points), low, mid)
-            lines.append(
-                f"| {endpoint_name} | {origin}→KIX | {'是' if with_return else '否'} "
-                f"| {len(points)} | {low if low is not None else '–'} "
-                f"| {mid if mid is not None else '–'} |"
-            )
+    for endpoint_name, call in (
+        ("month-matrix", probe.month_matrix),
+        ("calendar", probe.calendar),
+    ):
+        status, payload, _ = call(origin, "KIX", month)
+        if status != 200 or not payload:
+            lines.append(f"| {endpoint_name} | {origin}→KIX | HTTP {status} | – | – | – | – |")
+            verdict.append(f"- ❓ **{endpoint_name}**:沒有回傳資料,無法判斷。")
+            continue
 
-        one_way = summary.get(False)
-        round_trip = summary.get(True)
-        if one_way and round_trip and one_way[1] and round_trip[1]:
-            ratio = round_trip[1] / one_way[1]
-            if ratio < 1.15:
-                verdict.append(
-                    f"- ⚠️ **{endpoint_name}**:帶不帶 `return_date` 的最低價只差 "
-                    f"{ratio:.2f} 倍,高度懷疑不帶參數時回的其實是來回價。"
-                    "若成立,拼票加總會系統性高估,必須改用別的端點或改變演算法。"
-                )
-            else:
-                verdict.append(
-                    f"- ✅ **{endpoint_name}**:來回價是單程價的 {ratio:.2f} 倍,"
-                    "符合單程與來回是不同報價的預期。"
-                )
+        raw = payload.get("data") or []
+        rows = list(raw.values()) if isinstance(raw, dict) else raw
+        one_way_rows = [r for r in rows if not (r.get("return_date") or r.get("return_at"))]
+        round_trip_rows = len(rows) - len(one_way_rows)
+
+        points = parse_month_payload(endpoint_name, payload, origin, "KIX", probe.currency)
+        prices = sorted(p.price for p in points)
+        low = prices[0] if prices else None
+        mid = prices[len(prices) // 2] if prices else None
+
+        lines.append(
+            f"| {endpoint_name} | {origin}→KIX | {len(rows)} | {len(one_way_rows)} "
+            f"| {round_trip_rows} | {low if low is not None else '–'} "
+            f"| {mid if mid is not None else '–'} |"
+        )
+
+        if not rows:
+            verdict.append(f"- ❓ **{endpoint_name}**:零列,無法判斷。")
+        elif round_trip_rows == 0:
+            verdict.append(
+                f"- ✅ **{endpoint_name}**:{len(rows)} 列全部沒有回程日期,是單程價。"
+                "拼票加總成立。"
+            )
+        elif len(one_way_rows) == 0:
+            verdict.append(
+                f"- ⚠️ **{endpoint_name}**:{len(rows)} 列全部帶回程日期,這是來回票價。"
+                "拿去加總會把回家那段算兩次,必須換端點或改演算法。"
+            )
         else:
-            verdict.append(f"- ❓ **{endpoint_name}**:資料不足以判斷,見上表。")
+            verdict.append(
+                f"- ⚠️ **{endpoint_name}**:單程與來回混在一起"
+                f"({len(one_way_rows)} vs {round_trip_rows} 列)。解析器必須濾掉帶"
+                "回程日期的列,否則同一條航線會有兩種量綱的價格混用。"
+            )
 
     return lines + ["", *verdict, ""]
 

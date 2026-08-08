@@ -209,3 +209,105 @@ class TestMonthCoverage:
     def test_duplicate_months_collapse(self):
         dates = [date(2026, 10, 1), date(2026, 10, 20)]
         assert cached.months_covering(dates) == ["2026-10"]
+
+
+class TestAirportCodesSurviveTheRoundTrip:
+    """Aviasales 用**城市碼**回答機場層級的查詢:問 KIX 回 `destination: "OSA"`、
+    問 NRT 回 `"TYO"`。但資料確實是分機場的 —— 同一個月 TPE→NRT 與 TPE→HND
+    沒有一筆價格相同。
+
+    照抄回傳的城市碼當索引,查詢時用機場碼就永遠對不上,整站會在坐擁資料的情況下
+    顯示「此航段查無資料」。
+    """
+
+    def _payload(self, echoed_destination):
+        return {
+            "data": [
+                {"origin": "TPE", "destination": echoed_destination,
+                 "depart_date": "2026-10-01", "return_date": "", "value": 3471,
+                 "number_of_changes": 0}
+            ]
+        }
+
+    def test_the_requested_airport_is_what_gets_stored(self):
+        points = parse_month_payload("month-matrix", self._payload("OSA"), "TPE", "KIX", "TWD")
+        assert points[0].destination == "KIX"
+
+    def test_the_echoed_city_code_is_ignored(self):
+        points = parse_month_payload("month-matrix", self._payload("TYO"), "TPE", "NRT", "TWD")
+        assert points[0].destination == "NRT"
+        assert points[0].origin == "TPE"
+
+    def test_a_secondary_origin_airport_is_kept(self):
+        """問 TSA 也會被回成 TPE —— 松山和桃園是不同的候選,不能被併掉。"""
+        payload = {
+            "data": [
+                {"origin": "TPE", "destination": "TYO", "depart_date": "2026-10-01",
+                 "return_date": "", "value": 4801, "number_of_changes": 0}
+            ]
+        }
+        points = parse_month_payload("month-matrix", payload, "TSA", "NRT", "TWD")
+        assert (points[0].origin, points[0].destination) == ("TSA", "NRT")
+
+    def test_prices_are_findable_by_the_code_the_search_uses(self):
+        points = parse_month_payload("month-matrix", self._payload("OSA"), "TPE", "KIX", "TWD")
+        lookup = {(p.origin, p.destination, p.depart_date): p for p in points}
+        assert ("TPE", "KIX", date(2026, 10, 1)) in lookup
+
+
+class TestAirportCodesSurviveTheRoundTrip:
+    """Aviasales 用**城市碼**回答機場層級的查詢:問 KIX 回 `destination: "OSA"`、
+    問 NRT 回 `"TYO"`、問 TSA 回 `origin: "TPE"`。
+
+    但資料確實是分機場的 —— 實測 2026-10 整個月,TPE→NRT 與 TPE→HND 各 29 列、
+    交集 0;TPE→KIX 30 列與 TPE→ITM 14 列也交集 0。
+
+    照抄回傳的城市碼當索引,查詢時用機場碼就永遠對不上,整站會在坐擁資料的情況下
+    顯示「此航段查無資料」。
+    """
+
+    def _payload(self, echoed_origin, echoed_destination):
+        return {
+            "data": [
+                {"origin": echoed_origin, "destination": echoed_destination,
+                 "depart_date": "2026-10-01", "return_date": "", "value": 3471,
+                 "number_of_changes": 0}
+            ]
+        }
+
+    def test_the_requested_airport_is_what_gets_stored(self):
+        points = parse_month_payload(
+            "month-matrix", self._payload("TPE", "OSA"), "TPE", "KIX", "TWD"
+        )
+        assert points[0].destination == "KIX"
+
+    def test_the_echoed_city_code_is_ignored(self):
+        points = parse_month_payload(
+            "month-matrix", self._payload("TPE", "TYO"), "TPE", "NRT", "TWD"
+        )
+        assert (points[0].origin, points[0].destination) == ("TPE", "NRT")
+
+    def test_a_secondary_origin_airport_is_not_collapsed(self):
+        """問 TSA 也會被回成 TPE。松山跟桃園是兩個不同的候選,不能被併掉。"""
+        points = parse_month_payload(
+            "month-matrix", self._payload("TPE", "TYO"), "TSA", "NRT", "TWD"
+        )
+        assert points[0].origin == "TSA"
+
+    def test_the_calendar_endpoint_behaves_the_same(self):
+        payload = {
+            "data": {
+                "2026-10-01": {"price": 3471, "origin": "TPE", "destination": "OSA",
+                               "departure_at": "2026-10-01T09:00:00Z"}
+            }
+        }
+        points = parse_month_payload("calendar", payload, "TPE", "KIX", "TWD")
+        assert points[0].destination == "KIX"
+
+    def test_prices_are_findable_by_the_code_the_search_uses(self):
+        """這是這組測試真正在守的東西:存進去之後,查得回來。"""
+        points = parse_month_payload(
+            "month-matrix", self._payload("TPE", "OSA"), "TPE", "KIX", "TWD"
+        )
+        lookup = {(p.origin, p.destination, p.depart_date): p for p in points}
+        assert ("TPE", "KIX", date(2026, 10, 1)) in lookup
