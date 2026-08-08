@@ -20,6 +20,7 @@ from app import refdata, search
 from app.combos import SpecTooLarge
 from app.config import settings
 from app.db import closing_conn, connect, init_db, source_health
+from app.password import PasswordError, change_password
 from app.pricing import deeplinks
 from app.pricing.live import get_provider
 from app.combos import Combo, FlightLeg
@@ -83,6 +84,11 @@ class LegIn(BaseModel):
     origin: str
     destination: str
     date: date
+
+
+class PasswordIn(BaseModel):
+    current: str = Field(..., min_length=1)
+    new: str = Field(..., min_length=1)
 
 
 class VerifyIn(BaseModel):
@@ -270,6 +276,36 @@ def verify(body: VerifyIn) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# Account
+# --------------------------------------------------------------------------
+
+@app.post("/api/password")
+def set_password(body: PasswordIn) -> dict[str, Any]:
+    """變更 HTTP Basic auth 的密碼。
+
+    這個端點本身沒有做認證 —— 它不需要,因為 nginx 已經把整個站擋在密碼後面,
+    能打到這裡的人早就通過驗證了。不過還是要求輸入目前的密碼:那是防止有人
+    借用一台沒鎖螢幕、瀏覽器還記著帳密的電腦把你鎖在外面。
+    """
+    if not settings.htpasswd_path:
+        raise HTTPException(status_code=404, detail="這個站台沒有啟用密碼保護。")
+    try:
+        username = change_password(
+            Path(settings.htpasswd_path),
+            body.current,
+            body.new,
+            group=settings.htpasswd_gid,
+        )
+    except PasswordError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "username": username,
+        # Basic auth 沒有登出的概念,瀏覽器會繼續送舊帳密直到被拒。
+        "note": "密碼已更新。瀏覽器接下來會再問一次帳號密碼,請用新密碼登入。",
+    }
+
+
+# --------------------------------------------------------------------------
 # Health
 # --------------------------------------------------------------------------
 
@@ -299,6 +335,7 @@ def health(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
             "live_provider": get_provider().name,
             "price_month_endpoint": settings.price_month_endpoint,
             "currency": settings.default_currency,
+            "can_change_password": settings.can_change_password,
         },
     }
 

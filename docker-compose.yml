@@ -13,8 +13,15 @@ services:
     environment:
       AIR_DB_PATH: /data/air.sqlite3
       AIR_FRONTEND_DIR: /app/frontend
+      AIR_HTPASSWD_PATH: /auth/htpasswd
+      # nginx 在主機上以 www-data(gid 33)讀這個檔。容器裡的 gid 不保證一樣,
+      # 所以改寫後要明確設回這個值,否則換一次密碼就把所有人鎖在門外。
+      AIR_HTPASSWD_GID: "33"
     volumes:
       - air_data:/data
+      # 掛目錄而不是單檔:單檔 bind mount 綁在 inode 上,容器內無法用 rename
+      # 原子置換,改密碼就只能非原子地覆寫。
+      - /etc/nginx/air-auth:/auth
     restart: unless-stopped
 
 volumes:

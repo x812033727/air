@@ -47,6 +47,17 @@ class Settings:
         default_factory=lambda: os.getenv("DUFFEL_API_VERSION", "v2")
     )
 
+    # HTTP Basic auth 的密碼檔,由 nginx 驗證、由本站的變更密碼端點改寫。
+    # 空字串 = 沒有掛進來,變更密碼功能就不會出現。
+    htpasswd_path: str = field(default_factory=lambda: os.getenv("AIR_HTPASSWD_PATH", ""))
+    # nginx 以這個 gid 讀密碼檔。改寫後群組掉了就是所有人都登不進去,
+    # 而容器裡的 www-data gid 不見得跟主機一樣,所以明講。
+    htpasswd_gid: int | None = field(
+        default_factory=lambda: int(os.environ["AIR_HTPASSWD_GID"])
+        if os.getenv("AIR_HTPASSWD_GID")
+        else None
+    )
+
     default_currency: str = field(default_factory=lambda: os.getenv("AIR_CURRENCY", "TWD"))
     request_timeout_s: float = field(
         default_factory=lambda: float(os.getenv("AIR_HTTP_TIMEOUT", "20"))
@@ -60,6 +71,12 @@ class Settings:
     @property
     def has_live_prices(self) -> bool:
         return bool(self.duffel_token)
+
+    @property
+    def can_change_password(self) -> bool:
+        from pathlib import Path as _Path
+
+        return bool(self.htpasswd_path) and _Path(self.htpasswd_path).exists()
 
 
 settings = Settings()

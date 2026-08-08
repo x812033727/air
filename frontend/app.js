@@ -625,6 +625,9 @@ async function loadStatus() {
     strip.append(chip);
     strip.append(el("span", "chip chip--quiet", health.config.currency));
 
+    // 沒有密碼保護的站台不該顯示變更密碼的欄位 —— 那會暗示有一道其實不存在的門。
+    $("#password-block").hidden = !health.config.can_change_password;
+
     $("#colophon-meta").textContent =
       `機場資料 ${health.row_counts.airports.toLocaleString()} 筆 · ` +
       `快取價 ${health.row_counts.price_cache.toLocaleString()} 筆 · ` +
@@ -688,6 +691,41 @@ function wireKeyPanel() {
   });
 }
 
+/** Basic auth has no "log out" — the browser keeps sending the old credentials
+ *  until something rejects them. So the honest thing to say after a change is
+ *  "you're about to be asked again", not "done". */
+function wirePasswordPanel() {
+  const state_ = $("#pw-state");
+
+  $("#pw-save").addEventListener("click", async () => {
+    const current = $("#pw-current").value;
+    const next = $("#pw-new").value;
+    state_.className = "keys__state";
+    state_.textContent = "";
+
+    if (!current || !next) {
+      state_.className = "keys__state keys__state--bad";
+      state_.textContent = "兩欄都要填。";
+      return;
+    }
+
+    try {
+      const body = await api("/api/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ current, new: next }),
+      });
+      $("#pw-current").value = "";
+      $("#pw-new").value = "";
+      state_.className = "keys__state keys__state--ok";
+      state_.textContent = body.note;
+    } catch (error) {
+      state_.className = "keys__state keys__state--bad";
+      state_.textContent = error.message;
+    }
+  });
+}
+
 function newStop(country) {
   return { country, selected: new Set(), nights_min: 3, nights_max: 4, hop: "surface", label: "" };
 }
@@ -717,6 +755,7 @@ async function init() {
   }
 
   wireKeyPanel();
+  wirePasswordPanel();
   await renderPlan();
   $("#plan").addEventListener("submit", runSearch);
   $("#add-stop").addEventListener("click", () => {

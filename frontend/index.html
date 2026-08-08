@@ -20,15 +20,16 @@
   </div>
 </header>
 
-<!-- The key lives in this browser and rides along with each search. The site is
-     public and has no login, so anything stored server-side would be readable
-     by whoever found this panel. -->
+<!-- The key lives in this browser and rides along with each search. That
+     predates the password on the site; now that nginx guards everything, a key
+     in .env is also safe and applies to every device. Both paths work. -->
 <details class="keys" id="keys">
   <summary class="keys__summary">查價金鑰</summary>
   <div class="keys__body">
     <p class="keys__note">
       填了才有價格可以排名。金鑰<strong>只存在這台瀏覽器</strong>,查價時隨請求送出,
-      伺服器用完就忘、不會寫進硬碟。換一台裝置要再填一次。
+      伺服器用完就忘。換裝置要再填一次 —— 想一次搞定所有裝置的話,
+      現在站台已經上鎖,把它填進伺服器的 <code>.env</code> 也是安全的。
     </p>
     <div class="keys__fields">
       <label class="field">
@@ -45,6 +46,27 @@
       <button type="button" class="btn btn--ghost" id="key-clear">清除</button>
     </div>
     <p class="keys__state" id="key-state"></p>
+
+    <div class="keys__divider" id="password-block" hidden>
+      <p class="keys__note">
+        這個站是用瀏覽器原生的帳號密碼鎖起來的,帳號是 <code>air</code>。
+        改完之後<strong>瀏覽器會再問你一次帳密</strong> —— 那不是出錯,
+        是它還在送舊密碼。
+      </p>
+      <div class="keys__fields">
+        <label class="field">
+          <span class="field__label">目前的密碼</span>
+          <input type="password" id="pw-current" autocomplete="current-password">
+        </label>
+        <label class="field">
+          <span class="field__label">新密碼</span>
+          <input type="password" id="pw-new" autocomplete="new-password"
+                 placeholder="至少 8 個字元">
+        </label>
+        <button type="button" class="btn btn--primary" id="pw-save">變更密碼</button>
+      </div>
+      <p class="keys__state" id="pw-state"></p>
+    </div>
   </div>
 </details>
 

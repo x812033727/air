@@ -57,15 +57,28 @@ python -m pytest -q
 python scripts/spike_datasource.py --out ../docs/spike-datasource.md
 ```
 
+## 存取控制
+
+整站(含 `/api` 與 `/static`)在 nginx 的 HTTP Basic auth 後面,密碼檔在
+`/etc/nginx/air-auth/htpasswd`,帳號 `air`。認證這件事刻意交給 nginx —— 沒有
+自己寫的 session、cookie 或 CSRF 可以寫錯。
+
+`auth_basic` 放在 `location /` 裡面而不是 server 層,並且明確豁免
+`/.well-known/acme-challenge/`。這不是潔癖:設在 server 層會讓 Let's Encrypt
+的續簽驗證被密碼擋掉,憑證在 90 天後靜靜過期,中間毫無徵兆。改完之後跑過
+`certbot renew --dry-run` 實測通過。
+
+密碼可以在網頁上改(「查價金鑰」面板底下)。改寫流程是寫暫存檔 → 驗證新密碼
+真的驗得過 → 原子置換 → 再驗一次,任一步失敗就還原 —— 這裡的失敗模式是把自己
+鎖在門外,而不是「密碼沒改到」。
+
 ## 金鑰放哪裡
 
-站台是**公開的、沒有登入**,所以金鑰預設不存在伺服器上:網頁右上「查價金鑰」
-面板填入後存在該瀏覽器的 localStorage,查價時當成 `X-Travelpayouts-Token`
-標頭送出,伺服器用完就忘。換裝置要再填一次,這是刻意的代價 —— 存在伺服器就等於
-任何找到面板的人都讀得走。
+網頁上的「查價金鑰」面板填入後存在該瀏覽器的 localStorage,查價時當成
+`X-Travelpayouts-Token` 標頭送出,伺服器用完就忘。這是站台還公開時的設計。
 
-`.env` 裡的 `TRAVELPAYOUTS_TOKEN` 仍然有效,當成備援;填了就是**對所有訪客生效**,
-也就是大家共用你的 API 額度。
+站台上鎖之後,`.env` 裡的 `TRAVELPAYOUTS_TOKEN` 同樣安全,而且**所有裝置都適用**,
+不必每台重填。兩條路都能用。
 
 沒有任何金鑰時:參考資料層與深連結完全可用,查價會明確說「還沒有 token」而不是
 安靜地回空。
