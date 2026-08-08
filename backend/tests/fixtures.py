@@ -67,10 +67,17 @@ COUNTRIES_PAYLOAD = [
     {"code": "AB", "name_translations": {"en": "Abkhazia"}, "currency": "RUB"},
 ]
 
+AIRLINES_PAYLOAD = [
+    {"code": "BR", "name_translations": {"en": "EVA Air"}},
+    {"code": "IT", "name_translations": {"en": "Tigerair Taiwan"}},
+    {"code": "MM", "name_translations": {"en": "Peach"}},
+]
+
 PAYLOADS = {
     "countries": COUNTRIES_PAYLOAD,
     "cities": CITIES_PAYLOAD,
     "airports": AIRPORTS_PAYLOAD,
+    "airlines": AIRLINES_PAYLOAD,
 }
 
 

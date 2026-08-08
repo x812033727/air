@@ -40,13 +40,18 @@ class TestLoading:
     def test_refresh_reports_rows_written_per_file(self, conn):
         client = FakeClient(PAYLOADS)
         written = refdata.refresh(conn, client=client)
-        assert written == {"countries": 3, "cities": 4, "airports": 8}
+        assert written == {"countries": 3, "cities": 4, "airports": 8, "airlines": 3}
 
     def test_refresh_is_idempotent(self, loaded):
         client = FakeClient(PAYLOADS)
         refdata.refresh(loaded, client=client)
         total = loaded.execute("SELECT COUNT(*) FROM airports").fetchone()[0]
         assert total == 8
+
+    def test_airline_codes_get_names(self, loaded):
+        """價格資料只給代碼(TW、MM、IT),沒有這張表畫面上就只有兩個字母。"""
+        row = loaded.execute("SELECT name FROM airlines WHERE code='IT'").fetchone()
+        assert row["name"] == "Tigerair Taiwan"
 
     def test_every_fetch_records_its_row_count(self, loaded):
         health = source_health(loaded)

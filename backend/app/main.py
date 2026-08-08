@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import credentials, refdata, reverse, search
+from app import airlines, credentials, refdata, reverse, search
 from app.combos import SpecTooLarge
 from app.config import settings
 from app.db import closing_conn, connect, init_db, source_health
@@ -298,6 +298,41 @@ def verify(body: VerifyIn) -> dict[str, Any]:
                 combo, passengers=body.passengers, cabin=body.cabin
             ),
         },
+    }
+
+
+@app.get("/api/routes/airlines")
+def route_airlines(
+    pairs: str,
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> dict[str, Any]:
+    """這幾條航線上有哪些航空公司在飛。`pairs` 是 `TPE-NRT,ITM-TPE` 這種字串。
+
+    刻意獨立成一支端點,由頁面在結果畫出來之後才呼叫 —— 這是加值資訊,
+    不該讓它拖慢查價那條主線。
+
+    ⚠️ 這**不是**「那個價格是誰飛的」。排名用的 month-matrix 沒有航空公司欄位
+    (只有 `gate`,那是訂票網站),而有航空公司的 calendar 端點不吃日期。
+    所以這裡只能誠實回答航線層級的事實。
+    """
+    wanted: list[tuple[str, str]] = []
+    for chunk in pairs.split(","):
+        origin, _, destination = chunk.strip().partition("-")
+        if len(origin) == 3 and len(destination) == 3:
+            wanted.append((origin.upper(), destination.upper()))
+    if not wanted:
+        raise HTTPException(status_code=400, detail="pairs 格式應為 TPE-NRT,ITM-TPE")
+    if len(wanted) > 40:
+        raise HTTPException(status_code=400, detail="一次最多查 40 條航線")
+
+    keys = credentials.resolve(conn)
+    found = airlines.for_routes(conn, wanted, token=keys.token or None)
+    return {
+        "routes": {
+            route: [{"code": a.code, "name": a.name} for a in carriers]
+            for route, carriers in found.items()
+        },
+        "note": "這是這條航線上有在飛的航空公司,不是左邊那個價格所屬的航空公司。",
     }
 
 

@@ -311,3 +311,49 @@ class TestAirportCodesSurviveTheRoundTrip:
         )
         lookup = {(p.origin, p.destination, p.depart_date): p for p in points}
         assert ("TPE", "KIX", date(2026, 10, 1)) in lookup
+
+
+class TestNearbyDates:
+    """「這天查無資料」單看會被讀成「那天沒有飛機」。實際上通常是這條航線只有
+    少數幾天被人搜過 —— 實測 ITM→TPE 在 2026-12 只有 3 天有價,同城的 KIX→TPE
+    有 28 天。抓價是整月一起抓的,所以那幾天就在手上。
+    """
+
+    @pytest.fixture
+    def conn(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(SCHEMA)
+        now = utcnow().isoformat()
+        rows = [("2026-12-02", 6476), ("2026-12-04", 7149), ("2026-12-29", 10871),
+                ("2026-10-29", 4548)]
+        for day, price in rows:
+            connection.execute(
+                """INSERT INTO price_cache (origin, destination, depart_date, currency,
+                       price, transfers, airline, flight_number, found_at, fetched_at,
+                       expires_at, source)
+                   VALUES ('ITM','TPE',?,'TWD',?,0,NULL,NULL,NULL,?,?,'test')""",
+                (day, price, now, now),
+            )
+        yield connection
+        connection.close()
+
+    def test_the_closest_priced_days_come_back_first(self, conn):
+        found = cached.nearest_priced_dates(conn, "ITM", "TPE", date(2026, 12, 13))
+        assert [p.depart_date.isoformat() for p in found] == ["2026-12-04", "2026-12-02"]
+
+    def test_days_far_outside_the_window_are_not_offered(self, conn):
+        """快取裡還留著上次搜尋別的月份抓的資料。四十天外的日子不是替代方案,
+        是雜訊 —— 而且會讓人以為那條航線附近真的有便宜票。"""
+        found = cached.nearest_priced_dates(conn, "ITM", "TPE", date(2026, 12, 13))
+        assert all(abs((p.depart_date - date(2026, 12, 13)).days) <= 14 for p in found)
+        assert "2026-10-29" not in [p.depart_date.isoformat() for p in found]
+
+    def test_a_wider_window_can_be_asked_for(self, conn):
+        found = cached.nearest_priced_dates(
+            conn, "ITM", "TPE", date(2026, 12, 13), window_days=60, limit=5
+        )
+        assert "2026-10-29" in [p.depart_date.isoformat() for p in found]
+
+    def test_a_route_with_nothing_nearby_returns_empty(self, conn):
+        assert cached.nearest_priced_dates(conn, "KIX", "TPE", date(2026, 12, 13)) == []

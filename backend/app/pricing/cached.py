@@ -556,6 +556,58 @@ def load_lookup(
     return lookup
 
 
+def nearest_priced_dates(
+    conn: sqlite3.Connection,
+    origin: str,
+    destination: str,
+    target: date,
+    *,
+    currency: str | None = None,
+    limit: int = 3,
+    window_days: int = 14,
+) -> list[PricePoint]:
+    """這條航線上離 `target` 最近、而且有價的日子。
+
+    「12-13 查無資料」單獨看會被讀成「那天飛不回來」。實際上通常是這條航線只有
+    少數幾天被人搜過 —— 實測 ITM→TPE 在 2026-12 只有 3 天有價,而同城的
+    KIX→TPE 有 28 天。抓價本來就是整月一起抓的,所以那幾天就在手上,把它拿出來
+    就能把死路變成下一步。
+    """
+    currency = currency or settings.default_currency
+    rows = conn.execute(
+        """
+        SELECT * FROM price_cache
+        WHERE origin = ? AND destination = ? AND currency = ?
+          AND ABS(julianday(depart_date) - julianday(?)) <= ?
+        ORDER BY ABS(julianday(depart_date) - julianday(?)) ASC
+        LIMIT ?
+        """,
+        (origin, destination, currency, target.isoformat(), window_days,
+         target.isoformat(), limit),
+    ).fetchall()
+
+    points = []
+    for row in rows:
+        depart = _parse_date(row["depart_date"])
+        if depart is None:
+            continue
+        points.append(
+            PricePoint(
+                origin=row["origin"],
+                destination=row["destination"],
+                depart_date=depart,
+                price=row["price"],
+                currency=row["currency"],
+                transfers=row["transfers"],
+                airline=row["airline"],
+                flight_number=row["flight_number"],
+                found_at=row["found_at"],
+                fetched_at=datetime.fromisoformat(row["fetched_at"]),
+            )
+        )
+    return points
+
+
 def fetched_routes(
     conn: sqlite3.Connection, currency: str | None = None
 ) -> dict[tuple[str, str, str], int]:

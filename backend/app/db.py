@@ -99,6 +99,23 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at  TEXT NOT NULL
 );
 
+-- 一條航線上實際有哪些航空公司在飛。價格那張表(month-matrix)只有 `gate`,
+-- 也就是訂票網站(City.Travel、Biletix),不是航空公司 —— 航空公司只在
+-- v1/prices/calendar 拿得到,而那個端點不吃日期,所以這是航線層級的事實,
+-- 不能拿來解釋某一天某個價格是誰飛的。
+CREATE TABLE IF NOT EXISTS route_airlines (
+    origin      TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    airline     TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    PRIMARY KEY (origin, destination, airline)
+);
+
+CREATE TABLE IF NOT EXISTS airlines (
+    code    TEXT PRIMARY KEY,
+    name    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fetch_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     source      TEXT NOT NULL,

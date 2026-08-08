@@ -821,3 +821,32 @@ a.chip { text-decoration: none; }
   .ticket { grid-template-columns: minmax(0, 1fr); }
   .method__noprice { text-align: left; }
 }
+
+/* ---- Nearby dates & who flies the route -------------------------------- */
+
+.alts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.45rem;
+  align-items: baseline;
+  margin-top: 0.4rem;
+}
+
+.alts:empty { display: none; }
+
+.alts__label {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+.alts__day {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.1rem 0.35rem;
+  white-space: nowrap;
+}

@@ -309,6 +309,21 @@ function priceBlock(combo, currency) {
         missing.map((leg) => `${leg.origin}→${leg.destination}`).join(" / ")
       )
     );
+    // 「這天查無資料」會被讀成「那天沒有飛機」。實際上多半是這條航線只有少數
+    // 幾天被人搜過 —— 那些日子就在同一批抓回來的資料裡,講出來就變成下一步。
+    for (const leg of missing) {
+      const alts = leg.alternatives || [];
+      if (!alts.length) continue;
+      const line = el("div", "alts");
+      line.append(el("span", "alts__label", `${leg.origin}→${leg.destination} 附近有價的日子`));
+      for (const alt of alts) {
+        line.append(
+          el("span", "alts__day",
+             `${alt.date.slice(5)} ${money(alt.price, currency)}(${alt.days_away > 0 ? "+" : ""}${alt.days_away}天)`)
+        );
+      }
+      box.append(line);
+    }
   }
 
   // 比基準貴也要講。只在省錢時才顯示,等於把不利的比較悄悄藏起來。
@@ -325,6 +340,35 @@ function priceBlock(combo, currency) {
     );
   }
   return box;
+}
+
+/** 航線上有誰飛。結果畫出來之後才去問,因為這是加值資訊,不該拖慢查價那條主線。
+ *  ⚠️ 這不是「那個價格是誰飛的」—— 排名用的資料根本沒有航空公司欄位。 */
+async function annotateAirlines(combos) {
+  const pairs = [...new Set(
+    combos.flatMap((c) => c.legs.map((l) => `${l.origin}-${l.destination}`))
+  )].slice(0, 40);
+  if (!pairs.length) return;
+
+  let routes;
+  try {
+    ({ routes } = await api(`/api/routes/airlines?pairs=${pairs.join(",")}`));
+  } catch {
+    return;  // 純加值,拿不到就算了,不打擾使用者
+  }
+
+  for (const node of document.querySelectorAll("[data-route]")) {
+    const carriers = routes[node.dataset.route] || [];
+    if (!carriers.length) continue;
+    node.replaceChildren();
+    // 一張卡上有兩三段,標籤不帶航線代碼的話兩行長得一模一樣。
+    node.append(el("span", "alts__label", `${node.dataset.route} 有誰飛`));
+    for (const carrier of carriers) {
+      const chip = el("span", "alts__day", carrier.name);
+      chip.title = carrier.code;
+      node.append(chip);
+    }
+  }
 }
 
 function oldestAge(combo) {
@@ -361,6 +405,13 @@ function resultCard(combo, index, currency, options = {}) {
     const risks = el("ul", "card__risks");
     for (const risk of combo.risks) risks.append(el("li", null, risk));
     card.append(risks);
+  }
+
+  // 每段留一個空槽,結果畫出來之後再由 annotateAirlines 填上「這條線有誰飛」。
+  for (const leg of combo.legs) {
+    const slot = el("div", "alts");
+    slot.dataset.route = `${leg.origin}-${leg.destination}`;
+    card.append(slot);
   }
 
   card.append(
@@ -570,6 +621,7 @@ async function runSearch(event) {
       showNotice("沒有可行的組合", "試著放寬日期區間,或多選幾個機場。", "info");
     }
     $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
+    annotateAirlines([...result.results, ...result.unpriceable]);
   } catch (error) {
     showNotice("搜尋沒有成功", error.message, "alert");
   } finally {

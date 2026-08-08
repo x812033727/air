@@ -29,6 +29,9 @@ FILES = {
     "countries": f"{BASE_URL}/countries.json",
     "cities": f"{BASE_URL}/cities.json",
     "airports": f"{BASE_URL}/airports.json",
+    # 航空公司代碼對名稱。價格資料只給代碼(TW、MM、IT),沒有這張表就只能
+    # 在畫面上印兩個字母。
+    "airlines": f"{BASE_URL}/airlines.json",
 }
 
 
@@ -65,6 +68,7 @@ def refresh(conn: sqlite3.Connection, *, client: httpx.Client | None = None) -> 
                 "countries": _write_countries,
                 "cities": _write_cities,
                 "airports": _write_airports,
+                "airlines": _write_airlines,
             }[name]
             written[name] = writer(conn, payload)
         conn.commit()
@@ -207,6 +211,23 @@ def _write_airports(conn: sqlite3.Connection, payload: Iterable[dict[str, Any]])
             time_zone = excluded.time_zone,
             iata_type = excluded.iata_type,
             flightable = excluded.flightable
+        """,
+        rows,
+    )
+    return len(rows)
+
+
+def _write_airlines(conn: sqlite3.Connection, payload: Iterable[dict[str, Any]]) -> int:
+    rows = []
+    for entry in payload:
+        code = entry.get("code")
+        if not code:
+            continue
+        rows.append((code, _english(entry) or code))
+    conn.executemany(
+        """
+        INSERT INTO airlines (code, name) VALUES (?, ?)
+        ON CONFLICT(code) DO UPDATE SET name = excluded.name
         """,
         rows,
     )

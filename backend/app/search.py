@@ -256,15 +256,15 @@ def run(
             "shown": min(len(ranked), limit),
         },
         "results": [
-            _serialise(p, request, cheapest_baseline, marker) for p in ranked[:limit]
+            _serialise(p, request, cheapest_baseline, marker, conn) for p in ranked[:limit]
         ],
         "baselines": [
-            _serialise(p, request, None, marker) for p in baselines[:BASELINE_LIMIT]
+            _serialise(p, request, None, marker, conn) for p in baselines[:BASELINE_LIMIT]
         ],
         # A sample, plus the full count above. Enough to show what a gap looks
         # like without shipping thousands of rows nobody will read.
         "unpriceable": [
-            _serialise(p, request, None, marker) for p in unpriced[:UNPRICEABLE_SAMPLE]
+            _serialise(p, request, None, marker, conn) for p in unpriced[:UNPRICEABLE_SAMPLE]
         ],
         "warnings": warnings,
     }
@@ -275,6 +275,7 @@ def _serialise(
     request: SearchRequest,
     baseline_total: float | None,
     marker: str = "",
+    conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     combo = pricing.combo
     total = pricing.total
@@ -304,6 +305,10 @@ def _serialise(
                 "airline": leg.point.airline if leg.point else None,
                 "fetched_at": leg.point.fetched_at.isoformat() if leg.point else None,
                 "age_hours": round(leg.point.age_hours, 1) if leg.point else None,
+                # 「這天查無資料」單看會被讀成「那天沒有飛機」。實際上通常是這條
+                # 航線只有少數幾天被人搜過,而抓價本來就是整月一起抓的 ——
+                # 那幾天就在手上,拿出來就能把死路變成下一步。
+                "alternatives": _alternatives(conn, leg, request.currency),
             }
             for leg in pricing.legs
         ],
@@ -321,6 +326,24 @@ def _serialise(
             ),
         },
     }
+
+
+def _alternatives(
+    conn: sqlite3.Connection | None, leg, currency: str
+) -> list[dict[str, Any]]:
+    if conn is None or leg.status == "ok":
+        return []
+    nearby = cached.nearest_priced_dates(
+        conn, leg.leg.origin, leg.leg.destination, leg.leg.depart_date, currency=currency
+    )
+    return [
+        {
+            "date": point.depart_date.isoformat(),
+            "price": point.price,
+            "days_away": (point.depart_date - leg.leg.depart_date).days,
+        }
+        for point in nearby
+    ]
 
 
 def risks(combo: Combo, request: SearchRequest) -> list[str]:
