@@ -13,6 +13,9 @@ const state = {
   home: { country: "TW", selected: new Set(["TPE", "TSA"]), label: "台北" },
   stops: [],
   lastSearch: null,
+  // 沒有即時報價來源時,「查即時價」按鈕只會回一句「未接即時報價來源」——
+  // 白費一次點擊,而且旁邊的連結早就在做同一件事。
+  hasLivePricing: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -354,7 +357,13 @@ function resultCard(combo, index, currency, options = {}) {
     card.append(risks);
   }
 
-  card.append(linkRow("整趟一張票", combo.links.single_ticket, verifyButton(combo, currency)));
+  card.append(
+    linkRow(
+      "整趟一張票",
+      combo.links.single_ticket,
+      state.hasLivePricing ? verifyButton(combo, currency) : null
+    )
+  );
 
   const splitRow = el("div", "card__actions");
   splitRow.append(el("span", "label", "分段拼票"));
@@ -581,6 +590,7 @@ async function loadStatus() {
     const strip = $("#status-strip");
     strip.replaceChildren();
 
+    state.hasLivePricing = health.config.live_provider !== "deeplink";
     const pricing = health.config.cached_prices;
     const chip = el(
       "span",
