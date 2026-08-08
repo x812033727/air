@@ -323,11 +323,12 @@ def _trip(conn: sqlite3.Connection, spec: TripIn) -> reverse.Trip:
 def reverse_plans(
     body: ReverseIn, conn: sqlite3.Connection = Depends(get_conn)
 ) -> dict[str, Any]:
-    """倒買法:兩趟旅行,三種買法,四段航程重新配對。
+    """倒買法:兩趟旅行,四種買法,四段航程重新配對。
 
     這裡**不排名價格**,而那不是還沒做完。實測 Travelpayouts 對台灣出發的航線
     一列來回快取都沒有,而倒買法省的就是來回計價 —— 用單程價加總算出來的數字
-    保證看不到那個效果,顯示它比不顯示更糟。只有「四段全拆單程」帶價格。
+    保證看不到那個效果,顯示它比不顯示更糟。價格只掛在單程票上;
+    整個買法的總價只有「四段全拆單程」給得出來。
     """
     home = refdata.expand_airports(conn, body.home)
     if not home:
@@ -351,7 +352,7 @@ def reverse_plans(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # 只有「四段全拆單程」那種買法有價格可算,而它需要的航線很少(四段,不是
+    # 有價格可算的只有單程票,而它們需要的航線很少(四段,不是
     # 幾千種組合),所以直接在這裡抓完 —— 不像單趟搜尋要拆成 warm / search 兩段。
     pairs = sorted({(leg.origin, leg.destination) for g in groups for p in g for leg in p.legs})
     dates = [leg.depart_date for g in groups for p in g for leg in p.legs]
@@ -394,9 +395,17 @@ REVERSE_GROUP_LIMIT = 12
 
 
 def _serialise_plan(plan, lookup, fetched, body: ReverseIn) -> dict[str, Any]:
+    # 單程票各自標價;plan 級的總價只在整個買法都可計價時給(即四段全拆),
+    # 而且沿用「缺一段就不給總價」的規則,絕不做部分加總。
+    ticket_pricing = {
+        i: cached.price_combo(t.combo, lookup, fetched)
+        for i, t in enumerate(plan.tickets)
+        if t.priceable
+    }
+
     pricing = None
     if plan.priceable:
-        combos = [cached.price_combo(t.combo, lookup, fetched) for t in plan.tickets]
+        combos = list(ticket_pricing.values())
         complete = all(c.is_complete for c in combos)
         pricing = {
             "total": sum(c.total or 0 for c in combos) if complete else None,
@@ -420,6 +429,18 @@ def _serialise_plan(plan, lookup, fetched, body: ReverseIn) -> dict[str, Any]:
                 "label": ticket.label,
                 "role": ticket.role,
                 "open_jaw": ticket.is_open_jaw,
+                "priceable": ticket.priceable,
+                "pricing": (
+                    {
+                        "total": ticket_pricing[i].total,
+                        "missing": [
+                            f"{leg.origin}→{leg.destination}"
+                            for leg in ticket_pricing[i].missing_legs
+                        ],
+                    }
+                    if i in ticket_pricing
+                    else None
+                ),
                 "legs": [
                     {
                         "origin": leg.origin,
@@ -432,7 +453,7 @@ def _serialise_plan(plan, lookup, fetched, body: ReverseIn) -> dict[str, Any]:
                     ticket.combo, passengers=body.passengers, cabin=body.cabin
                 ),
             }
-            for ticket in plan.tickets
+            for i, ticket in enumerate(plan.tickets)
         ],
     }
 

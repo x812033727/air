@@ -37,10 +37,10 @@ def legs_of(ticket: Ticket) -> list[str]:
     return [f"{leg.origin}→{leg.destination}@{leg.depart_date.isoformat()}" for leg in ticket.legs]
 
 
-class TestTheThreeBuyingMethods:
-    def test_all_three_are_produced(self):
+class TestTheFourBuyingMethods:
+    def test_all_four_are_produced(self):
         methods = {p.method for p in build_plans(HOME, TOKYO, OSAKA)}
-        assert methods == {"normal", "reverse", "split"}
+        assert methods == {"normal", "reverse", "hybrid", "split"}
 
     def test_normal_is_two_plain_round_trips(self):
         plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "normal")
@@ -64,13 +64,65 @@ class TestTheThreeBuyingMethods:
         assert all(len(t.legs) == 1 for t in plan.tickets)
 
     def test_the_same_four_flights_appear_in_every_method(self):
-        """三種買法飛的是同樣四段,差別只在怎麼綁票。"""
+        """四種買法飛的是同樣四段,差別只在怎麼綁票。"""
         plans = build_plans(HOME, TOKYO, OSAKA)
         signatures = {
             p.method: sorted(f"{l.origin}→{l.destination}@{l.depart_date}" for l in p.legs)
             for p in plans
         }
-        assert signatures["normal"] == signatures["reverse"] == signatures["split"]
+        assert (
+            signatures["normal"]
+            == signatures["reverse"]
+            == signatures["hybrid"]
+            == signatures["split"]
+        )
+
+
+class TestHybrid:
+    """單程＋反向:兩張單程包住一張倒買票。
+
+    這是圖解文章示範的買法 —— 倒買票以外站(第一趟的目的地)為出發地計價,
+    省錢與便宜商務艙都來自那張;其餘兩段拆成單程交給廉航。
+    """
+
+    def test_hybrid_is_two_one_ways_around_the_reverse_ticket(self):
+        plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "hybrid")
+        out, reverse_ticket, back = plan.tickets
+
+        assert (out.role, reverse_ticket.role, back.role) == ("單程", "倒買票", "單程")
+        assert legs_of(out) == ["TPE→NRT@2026-10-05"]
+        assert legs_of(reverse_ticket) == ["NRT→TPE@2026-10-10", "TPE→KIX@2026-12-06"]
+        assert legs_of(back) == ["KIX→TPE@2026-12-11"]
+
+    def test_the_kept_ticket_is_exactly_the_reverse_plans_dao_mai_ticket(self):
+        """留下的必須是倒買票(外站出發那張),不是包覆票 —— 包覆票只是兩段
+        台灣出發的航段黏在一起,沒有外站計價可佔便宜,所以鏡像變體刻意不做。"""
+        plans = build_plans(HOME, TOKYO, OSAKA)
+        kept = plan_of(plans, "hybrid").tickets[1]
+        dao_mai = next(t for t in plan_of(plans, "reverse").tickets if t.role == "倒買票")
+        assert kept.legs == dao_mai.legs
+
+    def test_only_the_reverse_ticket_is_open_jaw(self):
+        plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "hybrid")
+        assert tuple(t.is_open_jaw for t in plan.tickets) == (False, True, False)
+        # 單一出發機場時倒買票中間是連續的(NRT→TPE、TPE→KIX),開口在兩端。
+        assert plan.tickets[1].has_gap is False
+
+    def test_only_the_one_way_tickets_are_priceable(self):
+        """單程票有真的單程快取價可標;倒買票是按來回計價開的票,
+        用單程價拼它就是整個模組拒絕顯示的那種保證錯的數字。"""
+        plans = build_plans(HOME, TOKYO, OSAKA)
+        hybrid = plan_of(plans, "hybrid")
+        assert tuple(t.priceable for t in hybrid.tickets) == (True, False, True)
+        assert all(t.priceable for t in plan_of(plans, "split").tickets)
+        assert not any(t.priceable for t in plan_of(plans, "normal").tickets)
+        assert not any(t.priceable for t in plan_of(plans, "reverse").tickets)
+
+    def test_a_priceable_plan_only_contains_priceable_tickets(self):
+        """plan 級的 priceable 意思是「總價是誠實的」,所以它蘊含每張票都可標價。"""
+        for plan in build_plans(HOME, TOKYO, OSAKA):
+            if plan.priceable:
+                assert all(t.priceable for t in plan.tickets)
 
 
 class TestChronology:
@@ -130,6 +182,7 @@ class TestPricing:
         assert plan_of(plans, "split").priceable is True
         assert plan_of(plans, "normal").priceable is False
         assert plan_of(plans, "reverse").priceable is False
+        assert plan_of(plans, "hybrid").priceable is False
 
     def test_every_unpriceable_method_says_why(self):
         for plan in build_plans(HOME, TOKYO, OSAKA):
@@ -192,6 +245,14 @@ class TestRisks:
     def test_normal_is_described_as_flexible_but_usually_dearer(self):
         notes = " ".join(risks(plan_of(build_plans(HOME, TOKYO, OSAKA), "normal")))
         assert "彈性" in notes
+
+    def test_hybrid_warns_about_the_binding_and_the_loose_one_ways(self):
+        """倒買票一張就把兩趟綁在一起;兩張單程則是各自獨立的散票。"""
+        notes = " ".join(risks(plan_of(build_plans(HOME, TOKYO, OSAKA), "hybrid")))
+        assert "綁住兩趟" in notes
+        assert "自動失效" in notes
+        assert "各自獨立訂票" in notes
+        assert "要自己移動" not in notes
 
     def test_the_gap_in_a_reverse_ticket_is_not_called_self_transfer(self):
         """包覆票確實在東京落地、下一段從關西起飛,但中間那段你是搭**另一張票**
