@@ -7,15 +7,17 @@ venv/
 node_modules/
 .next/
 out/
-frontend/.env*.local
 
+# SQLite lives on a docker volume in deployment and in /tmp during development.
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
 data/
 
+# 本機部署設定:從 .env.example 複製後填入金鑰。
 .env
 .env.local
+frontend/.env*.local
 
 .DS_Store
 *.log

@@ -280,7 +280,16 @@ def cities_in_country(conn: sqlite3.Connection, country_code: str) -> list[City]
         )
         for city_code, members in grouped.items()
     ]
-    cities.sort(key=lambda c: (-len(c.airports), c.name))
+    # Places a traveller from Taiwan would actually pick, in the order they'd
+    # think of them; everything else falls in behind, multi-airport cities
+    # first because that is where airport substitution saves money.
+    cities.sort(
+        key=lambda c: (
+            zh_names.city_rank(c.code),
+            -len(c.airports),
+            c.name,
+        )
+    )
     return cities
 
 

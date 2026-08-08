@@ -76,10 +76,11 @@ class TestPicker:
         }
         assert "RBJ" not in codes
 
-    def test_multi_airport_cities_sort_first(self, loaded):
-        # 機場多的城市才是「替代機場」省錢的來源,擺前面。
+    def test_cities_sort_by_how_likely_you_are_to_go_there(self, loaded):
+        """依名稱排序會把大分、小松排在福岡、沖繩前面;只看機場數量則讓離島
+        小機場跟主要門戶同級。所以用手寫譯名表的排列順序當熱門度。"""
         cities = refdata.cities_in_country(loaded, "JP")
-        assert [c.code for c in cities] == ["OSA", "TYO"]
+        assert [c.code for c in cities] == ["TYO", "OSA"]
 
     def test_popular_destinations_lead_the_country_list(self, loaded):
         countries = refdata.list_countries(loaded)

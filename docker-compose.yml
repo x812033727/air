@@ -1,0 +1,21 @@
+services:
+  air:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    # One service. The frontend is a static page served by the same process —
+    # a second container running a Node build would be operational cost with
+    # nothing to show for it.
+    ports:
+      - "127.0.0.1:3007:8000"
+    env_file:
+      - .env
+    environment:
+      AIR_DB_PATH: /data/air.sqlite3
+      AIR_FRONTEND_DIR: /app/frontend
+    volumes:
+      - air_data:/data
+    restart: unless-stopped
+
+volumes:
+  air_data:

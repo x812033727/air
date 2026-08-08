@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>air — 多開口機票組合</title>
+<meta name="description" content="選國家、選機場、選日期,列出便宜的多開口與拼票組合。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>✈</text></svg>">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead__brand">
+    <span class="wordmark">AIR</span>
+    <span class="masthead__tag">多開口機票組合</span>
+  </div>
+  <div class="masthead__meta" id="status-strip" aria-live="polite">
+    <span class="chip chip--quiet" id="status-text">連線中</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- The route line is the product: a trip you fly, break, and fly again. -->
+  <section class="hero">
+    <p class="hero__lede">
+      制式來回票很少是最便宜的買法。<strong>開口</strong>是去程降落地跟回程出發地不一樣,
+      中間那段自己走;<strong>拼票</strong>是各段分開買單程票。省下來的錢,
+      藏在「哪個機場、哪個順序、哪一天」的排列組合裡。
+    </p>
+    <div class="hero__diagram" aria-hidden="true">
+      <div class="routeline routeline--demo">
+        <span class="node"></span>
+        <span class="seg seg--fly"><span class="seg__glyph">✈</span></span>
+        <span class="node"></span>
+        <span class="seg seg--surface"><span class="seg__glyph">陸路</span></span>
+        <span class="node"></span>
+        <span class="seg seg--fly"><span class="seg__glyph">✈</span></span>
+        <span class="node"></span>
+      </div>
+      <div class="routeline__labels">
+        <span>台北</span><span>東京</span><span>大阪</span><span>台北</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="plan-heading">
+    <h2 class="eyebrow" id="plan-heading">行程</h2>
+
+    <form id="plan" class="plan">
+      <div class="stopchain" id="stopchain">
+        <!-- Origin, stops, and the trip home are rendered here by app.js -->
+      </div>
+
+      <button type="button" class="btn btn--ghost" id="add-stop">加一個停留點</button>
+
+      <div class="controls">
+        <label class="field">
+          <span class="field__label">最早出發</span>
+          <input type="date" name="depart_earliest" id="depart-earliest" required>
+        </label>
+        <label class="field">
+          <span class="field__label">最晚出發</span>
+          <input type="date" name="depart_latest" id="depart-latest" required>
+        </label>
+        <label class="field field--narrow">
+          <span class="field__label">人數</span>
+          <input type="number" id="passengers" min="1" max="9" value="1">
+        </label>
+        <label class="field">
+          <span class="field__label">艙等</span>
+          <select id="cabin">
+            <option value="economy">經濟艙</option>
+            <option value="premium_economy">豪華經濟艙</option>
+            <option value="business">商務艙</option>
+            <option value="first">頭等艙</option>
+          </select>
+        </label>
+        <label class="switch">
+          <input type="checkbox" id="both-orders" checked>
+          <span>兩種造訪順序都試</span>
+        </label>
+      </div>
+
+      <div class="plan__submit">
+        <button type="submit" class="btn btn--primary" id="submit">找組合</button>
+        <p class="plan__cost" id="cost-hint"></p>
+      </div>
+    </form>
+  </section>
+
+  <section id="notices" class="notices" aria-live="polite"></section>
+
+  <section id="results" class="results" aria-labelledby="results-heading" hidden>
+    <div class="results__head">
+      <h2 class="eyebrow" id="results-heading">組合</h2>
+      <p class="results__summary" id="results-summary"></p>
+    </div>
+    <ol class="cards" id="result-list"></ol>
+  </section>
+
+  <section id="baselines" class="results results--muted" hidden>
+    <div class="results__head">
+      <h2 class="eyebrow">基準:單城來回</h2>
+      <p class="results__summary">只玩一個城市的一般來回票,用來衡量開口到底省了多少。看到的城市比較少,所以不跟上面同列排名。</p>
+    </div>
+    <ol class="cards" id="baseline-list"></ol>
+  </section>
+
+  <section id="gaps" class="results results--muted" hidden>
+    <div class="results__head">
+      <h2 class="eyebrow">查無資料</h2>
+      <p class="results__summary" id="gaps-summary"></p>
+    </div>
+    <ol class="cards" id="gap-list"></ol>
+  </section>
+
+</main>
+
+<footer class="colophon">
+  <p>
+    價格來自 Aviasales 的快取資料,是<strong>參考價</strong>不是可訂價,每一格都標了抓取時間。
+    要看實際票價請用每列的連結。
+  </p>
+  <p class="colophon__meta" id="colophon-meta"></p>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

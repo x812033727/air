@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Any, Literal
 
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app import refdata, search
@@ -256,7 +261,7 @@ def health(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
     counts = {
         table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         for table in ("countries", "cities", "airports", "price_cache")
-    }
+    }  # noqa: S608 — table names are a fixed literal tuple, not user input
     sources = source_health(conn)
     reference_ready = counts["airports"] > 0
     return {
@@ -272,3 +277,39 @@ def health(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
             "currency": settings.default_currency,
         },
     }
+
+
+# --------------------------------------------------------------------------
+# Static frontend
+# --------------------------------------------------------------------------
+# One page, one form, one table. A second container running a Node build would
+# be pure operational cost, so FastAPI serves the page itself. Mounted last so
+# it never shadows an /api route.
+
+FRONTEND_DIR = Path(
+    os.getenv("AIR_FRONTEND_DIR", Path(__file__).resolve().parents[2] / "frontend")
+)
+
+class RevalidatingStatics(StaticFiles):
+    """Serve assets with `no-cache` so browsers always revalidate.
+
+    Not "don't cache" — the ETag still short-circuits an unchanged file to a
+    304. This exists because the alternative is shipping a CSS change and
+    having people see the old page until they clear their cache, which is
+    indistinguishable from the change not working.
+    """
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+if FRONTEND_DIR.is_dir():
+    app.mount("/static", RevalidatingStatics(directory=FRONTEND_DIR), name="static")
+
+    @app.get("/", include_in_schema=False)
+    def index() -> FileResponse:
+        return FileResponse(
+            FRONTEND_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+        )

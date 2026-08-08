@@ -34,6 +34,9 @@ from app.pricing.cached import ComboPricing
 # only bounds what gets serialised, and the full counts ride along with it.
 MAX_RESULTS = 50
 UNPRICEABLE_SAMPLE = 10
+# Baselines are a reference line, not a list to shop from — the cheapest few
+# answer "what would a plain round trip have cost?" and more just adds noise.
+BASELINE_LIMIT = 4
 
 
 class UnknownPlace(ValueError):
@@ -231,7 +234,7 @@ def run(
             "shown": min(len(ranked), limit),
         },
         "results": [_serialise(p, request, cheapest_baseline) for p in ranked[:limit]],
-        "baselines": [_serialise(p, request, None) for p in baselines[:limit]],
+        "baselines": [_serialise(p, request, None) for p in baselines[:BASELINE_LIMIT]],
         # A sample, plus the full count above. Enough to show what a gap looks
         # like without shipping thousands of rows nobody will read.
         "unpriceable": [_serialise(p, request, None) for p in unpriced[:UNPRICEABLE_SAMPLE]],

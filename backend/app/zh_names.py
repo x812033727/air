@@ -127,6 +127,28 @@ def city_name(code: str, fallback: str) -> str:
     return CITY_ZH.get(code.upper(), fallback)
 
 
+# `CITY_ZH` is written region by region, most-travelled first within each —
+# so its insertion order already encodes how likely a traveller from Taiwan is
+# to pick a given city. Reusing it as a rank keeps one hand-maintained list
+# instead of two that can drift apart.
+CITY_RANK: dict[str, int] = {code: rank for rank, code in enumerate(CITY_ZH)}
+
+
+def city_rank(code: str) -> int:
+    """Lower sorts first; anything unlisted lands after every listed city.
+
+    Sorting by name instead puts 大分, 小松 and 富山 above 福岡 and 沖繩, and
+    sorting by airport count alone puts 「Hachijo Jima」 on equal footing with
+    them — a tiny island airport counts the same as a major gateway.
+    """
+    return CITY_RANK.get(code.upper(), len(CITY_RANK))
+
+
+def is_notable_city(code: str) -> bool:
+    """Is this somewhere a traveller from Taiwan would plausibly fly to?"""
+    return code.upper() in CITY_ZH
+
+
 def airport_name(code: str, fallback: str) -> str:
     """機場的中文簡稱;沒收錄就回英文原名。
 
