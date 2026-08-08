@@ -947,6 +947,22 @@ function ticketRow(ticket, currency) {
 
   body.append(line, labels);
 
+  // 「查無資料」單獨擺在那裡是條死路。這條航線通常還是有幾天有價的 ——
+  // 抓價本來就是整月一起抓的,那些日子就在手上,講出來就變成下一步。
+  for (const alt of ticket.pricing?.alternatives || []) {
+    if (!alt.days.length) continue;
+    const line_ = el("div", "alts");
+    line_.append(el("span", "alts__label", `${alt.leg} 附近有價的日子`));
+    for (const day of alt.days) {
+      line_.append(
+        el("span", "alts__day",
+           `${day.date.slice(5)} ${money(day.price, currency)}` +
+           `(${day.days_away > 0 ? "+" : ""}${day.days_away}天)`)
+      );
+    }
+    body.append(line_);
+  }
+
   const links = el("div", "ticket__links");
   for (const [name, href] of Object.entries(ticket.links)) {
     const link = el("a", "chip",

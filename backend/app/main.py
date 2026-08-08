@@ -417,7 +417,8 @@ def reverse_plans(
         "groups": [
             {
                 "plans": [
-                    _serialise_plan(plan, lookup, fetched, body) for plan in group
+                    _serialise_plan(plan, lookup, fetched, body, conn)
+                    for plan in group
                 ]
             }
             for group in groups[:REVERSE_GROUP_LIMIT]
@@ -429,7 +430,7 @@ def reverse_plans(
 REVERSE_GROUP_LIMIT = 12
 
 
-def _serialise_plan(plan, lookup, fetched, body: ReverseIn) -> dict[str, Any]:
+def _serialise_plan(plan, lookup, fetched, body: ReverseIn, conn=None) -> dict[str, Any]:
     # 單程票各自標價;plan 級的總價只在整個買法都可計價時給(即四段全拆),
     # 而且沿用「缺一段就不給總價」的規則,絕不做部分加總。
     ticket_pricing = {
@@ -472,6 +473,29 @@ def _serialise_plan(plan, lookup, fetched, body: ReverseIn) -> dict[str, Any]:
                             f"{leg.origin}→{leg.destination}"
                             for leg in ticket_pricing[i].missing_legs
                         ],
+                        # 「查無資料」單獨擺在那裡是條死路。這條航線通常還是有
+                        # 幾天有價的(實測 OKA→TPE 在 2026-12 有 10 天,只是最早
+                        # 從 12-16 開始),把那些日子講出來就變成下一步。
+                        "alternatives": [
+                            {
+                                "leg": f"{leg.origin}→{leg.destination}",
+                                "days": [
+                                    {
+                                        "date": point.depart_date.isoformat(),
+                                        "price": point.price,
+                                        "days_away": (
+                                            point.depart_date - leg.depart_date
+                                        ).days,
+                                    }
+                                    for point in cached.nearest_priced_dates(
+                                        conn, leg.origin, leg.destination, leg.depart_date
+                                    )
+                                ],
+                            }
+                            for leg in ticket_pricing[i].missing_legs
+                        ]
+                        if conn is not None
+                        else [],
                     }
                     if i in ticket_pricing
                     else None
