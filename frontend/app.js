@@ -788,3 +788,250 @@ async function init() {
 }
 
 init().catch((error) => showNotice("啟動失敗", error.message, "alert"));
+
+/* ==========================================================================
+ * 倒買法:兩趟旅行交叉綁票
+ *
+ * 這個模式**不比價**,而那不是還沒做完 —— 台灣出發的航線沒有來回票的快取資料,
+ * 而倒買法省的就是來回計價。用單程加總去猜,算出來的數字保證看不到那個效果。
+ * 所以這裡產出的是組票與連結,價格交給訂票網站。唯一有數字的是四段拆單程。
+ * ========================================================================== */
+
+const reverseState = {
+  home: { country: "TW", selected: new Set(["TPE", "TSA"]), label: "台北" },
+  trips: [
+    { country: "JP", selected: new Set(), label: "", depart: "", back: "" },
+    { country: "JP", selected: new Set(), label: "", depart: "", back: "" },
+  ],
+};
+
+function tripDatesRow(trip, onChange) {
+  const row = el("div", "stop__row");
+  for (const [key, label] of [["depart", "出發"], ["back", "回程"]]) {
+    const field = el("label", "field");
+    field.append(el("span", "field__label", label));
+    const input = el("input");
+    input.type = "date";
+    input.value = trip[key];
+    input.addEventListener("change", () => {
+      trip[key] = input.value;
+      onChange();
+    });
+    field.append(input);
+    row.append(field);
+  }
+  return row;
+}
+
+async function renderReversePlan() {
+  const chain = $("#reverse-chain");
+  chain.replaceChildren();
+
+  const origin = el("div", "stop");
+  origin.append(el("div", "stop__role", "出發"));
+  const originBody = el("div", "stop__body");
+  origin.append(originBody);
+  chain.append(origin);
+  await renderPlace(originBody, reverseState.home, renderReversePlan);
+
+  for (const [index, trip] of reverseState.trips.entries()) {
+    const node = el("div", "stop");
+    node.append(el("div", "stop__role", `第 ${index + 1} 趟`));
+    const body = el("div", "stop__body");
+    node.append(body);
+    chain.append(node);
+
+    await renderPlace(body, trip, renderReversePlan);
+    body.append(tripDatesRow(trip, renderReversePlan));
+  }
+}
+
+/** 一張票畫成一條航線。兩張票上下並排,交叉的地方就看得見了。 */
+function ticketRow(ticket) {
+  const row = el("div", "ticket");
+
+  const role = el("div", "ticket__role");
+  role.append(el("b", null, ticket.role));
+  if (ticket.open_jaw) role.append(document.createTextNode("開口"));
+  row.append(role);
+
+  const body = el("div", "ticket__body");
+
+  const line = el("div", "routeline");
+  const labels = el("div", "legs");
+  const stops = [];
+  ticket.legs.forEach((leg, i) => {
+    if (i > 0 && ticket.legs[i - 1].destination !== leg.origin) {
+      // 票上的缺口。這裡**不**寫「自己走」—— 倒買法的缺口是另一張票飛掉的。
+      stops.push({ code: ticket.legs[i - 1].destination, date: null, gapBefore: false });
+      stops.push({ code: leg.origin, date: leg.date, gapBefore: true });
+    } else if (i > 0) {
+      stops.push({ code: leg.origin, date: leg.date });
+    } else {
+      stops.push({ code: leg.origin, date: leg.date });
+    }
+    if (i === ticket.legs.length - 1) {
+      stops.push({ code: leg.destination, date: null });
+    }
+  });
+
+  stops.forEach((stop, i) => {
+    if (i > 0) {
+      const seg = el("span", stop.gapBefore ? "seg seg--surface" : "seg seg--fly");
+      seg.append(el("span", "seg__glyph", stop.gapBefore ? "另一張票" : "✈"));
+      line.append(seg);
+    }
+    line.append(el("span", "node"));
+    const label = el("div", "legs__stop");
+    label.append(el("div", "legs__code", stop.code));
+    if (stop.date) label.append(el("div", "legs__date", stop.date.slice(5)));
+    labels.append(label);
+  });
+
+  body.append(line, labels);
+
+  const links = el("div", "ticket__links");
+  for (const [name, href] of Object.entries(ticket.links)) {
+    const link = el("a", "chip",
+      { google_flights: "Google Flights", kayak: "Kayak", aviasales: "Aviasales" }[name] || name);
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noopener";
+    links.append(link);
+  }
+  body.append(links);
+
+  row.append(body);
+  return row;
+}
+
+function methodCard(plan, currency) {
+  const card = el("div", `method${plan.method === "reverse" ? " method--reverse" : ""}`);
+
+  const head = el("div", "method__head");
+  head.append(el("div", "method__name", plan.method_label));
+
+  if (plan.pricing?.total != null) {
+    const price = el("div", "method__price", money(plan.pricing.total, currency));
+    head.append(price);
+  } else if (plan.pricing) {
+    head.append(
+      el("div", "method__noprice",
+         `四段裡有 ${plan.pricing.missing.join("、")} 查無資料,所以不算總價`)
+    );
+  } else {
+    head.append(el("div", "method__noprice", plan.unavailable_reason));
+  }
+  card.append(head);
+
+  for (const ticket of plan.tickets) card.append(ticketRow(ticket));
+
+  if (plan.risks?.length) {
+    const risks = el("ul", "card__risks");
+    risks.style.marginTop = "0.8rem";
+    for (const risk of plan.risks) risks.append(el("li", null, risk));
+    card.append(risks);
+  }
+  return card;
+}
+
+async function runReverse(event) {
+  event.preventDefault();
+  const button = $("#rev-submit");
+  $("#notices").replaceChildren();
+  shownNotices.clear();
+
+  const [first, second] = reverseState.trips;
+  if (!reverseState.home.selected.size || !first.selected.size || !second.selected.size) {
+    showNotice("還有地方沒選", "出發地和兩趟的目的地都要至少選一個機場。", "alert");
+    return;
+  }
+  if (!first.depart || !first.back || !second.depart || !second.back) {
+    showNotice("日期沒填完", "兩趟旅行的去程與回程日期都要填。", "alert");
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "組票中…";
+  try {
+    const body = await api("/api/reverse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        home: [...reverseState.home.selected],
+        first: { codes: [...first.selected], depart: first.depart, back: first.back,
+                 label: first.label },
+        second: { codes: [...second.selected], depart: second.depart, back: second.back,
+                  label: second.label },
+        try_both_orders: false,
+        passengers: Number($("#rev-passengers").value) || 1,
+        cabin: $("#rev-cabin").value,
+      }),
+    });
+
+    for (const warning of body.warnings || []) {
+      showNotice("注意", warning, "alert", topicOf(warning));
+    }
+
+    const list = $("#rev-list");
+    list.replaceChildren();
+    for (const plan of body.groups[0].plans) list.append(methodCard(plan, body.currency));
+
+    $("#rev-summary").textContent =
+      `${body.route_pairs} 條航線 · ${body.months.join("、")} · ` +
+      `這裡只組票不比價,票價請用每張票的連結各自查再比。`;
+    $("#reverse-results").hidden = false;
+    $("#reverse-results").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    showNotice("組票沒有成功", error.message, "alert");
+  } finally {
+    button.disabled = false;
+    button.textContent = "組票";
+  }
+}
+
+function wireModes() {
+  const tabs = { single: $("#mode-single"), reverse: $("#mode-reverse") };
+  const show = (mode) => {
+    for (const [name, tab] of Object.entries(tabs)) {
+      tab.setAttribute("aria-selected", String(name === mode));
+    }
+    $("#single-panel").hidden = mode !== "single";
+    $("#reverse-panel").hidden = mode !== "reverse";
+    for (const id of ["#results", "#baselines", "#gaps"]) {
+      if (mode !== "single") $(id).hidden = true;
+    }
+    if (mode !== "reverse") $("#reverse-results").hidden = true;
+  };
+  tabs.single.addEventListener("click", () => show("single"));
+  tabs.reverse.addEventListener("click", async () => {
+    show("reverse");
+    if (!$("#reverse-chain").children.length) await initReverse();
+  });
+}
+
+async function initReverse() {
+  const start = new Date();
+  start.setDate(start.getDate() + 60);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const [first, second] = reverseState.trips;
+
+  const a = new Date(start), aBack = new Date(start);
+  aBack.setDate(aBack.getDate() + 5);
+  const b = new Date(start), bBack = new Date(start);
+  b.setDate(b.getDate() + 62);
+  bBack.setDate(bBack.getDate() + 67);
+  first.depart = iso(a); first.back = iso(aBack);
+  second.depart = iso(b); second.back = iso(bBack);
+
+  const jp = await airportsFor("JP");
+  const tokyo = jp.find((c) => c.code === "TYO");
+  const osaka = jp.find((c) => c.code === "OSA");
+  if (tokyo) { tokyo.airports.forEach((x) => first.selected.add(x.code)); first.label = tokyo.name; }
+  if (osaka) { osaka.airports.forEach((x) => second.selected.add(x.code)); second.label = osaka.name; }
+
+  await renderReversePlan();
+  $("#reverse-form").addEventListener("submit", runReverse);
+}
+
+wireModes();

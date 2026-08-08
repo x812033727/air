@@ -48,9 +48,22 @@ class TestGoogleFlights:
         raw = decode(deeplinks.google_flights_url([OUTBOUND]))
         assert raw.endswith(b"\x98\x01\x02")  # trip = 2 (one way)
 
-    def test_multiple_legs_are_flagged_multi_city(self):
+    def test_an_open_jaw_is_flagged_multi_city(self):
         raw = decode(deeplinks.google_flights_url([OUTBOUND, INBOUND]))
         assert raw.endswith(b"\x98\x01\x03")  # trip = 3 (multi-city)
+
+    def test_a_there_and_back_pair_is_flagged_round_trip(self):
+        """Google 對來回票與多停點是不同的計價方式,把普通來回送成多停點會高估它。
+        在倒買法的比較裡,那等於系統性偏袒倒買法。"""
+        home_again = FlightLeg("NRT", "TPE", date(2026, 10, 11), "東京", "台北")
+        raw = decode(deeplinks.google_flights_url([OUTBOUND, home_again]))
+        assert raw.endswith(b"\x98\x01\x01")  # trip = 1 (round trip)
+
+    def test_a_round_trip_through_a_different_airport_stays_multi_city(self):
+        """桃園去、松山回不是單純的來回,不能當來回票送。"""
+        other_airport = FlightLeg("NRT", "TSA", date(2026, 10, 11), "東京", "台北")
+        raw = decode(deeplinks.google_flights_url([OUTBOUND, other_airport]))
+        assert raw.endswith(b"\x98\x01\x03")
 
     def test_each_passenger_gets_its_own_entry(self):
         raw = decode(deeplinks.google_flights_url([OUTBOUND], passengers=3))

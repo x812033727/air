@@ -87,6 +87,64 @@ airport 9,261 · railway 699 · bus 184 · heliport 173 · harbour 52
 
 ---
 
+## Google Flights 的三種搜尋模式(field 19)
+
+**日期**:2026-08-08 · **方法**:Chromium 載入兩個只差一個位元組的連結,讀回 Google 渲染的模式
+
+| 值 | 模式 | 用在 |
+| ---: | --- | --- |
+| 1 | Round trip(有回程欄位) | 去回同一組機場的普通來回票 |
+| 2 | One way | 單程 |
+| 3 | Multi-city | 開口票、多段 |
+
+**為什麼要分**:Google 對來回票與多停點是**不同的計價方式**,來回票價是當成一趟旅程
+構造的。把普通來回票送成多停點會高估它 —— 在倒買法的比較裡,那等於系統性偏袒倒買法。
+兩者渲染出來的欄位一模一樣,所以這個錯誤不會有任何徵兆。
+
+---
+
+## 台灣出發的航線拿不到來回票價
+
+**日期**:2026-08-08 · **方法**:`v2/prices/latest` 對照 `one_way=true/false`
+
+| 航線 | `one_way=true` | `one_way=false` |
+| --- | ---: | ---: |
+| MOW→LED | 100 | 100 |
+| LON→PAR | 100 | 11 |
+| **TPE→KIX** | 100 | **0** |
+| **TPE→NRT** | 100 | **0** |
+
+`v1/prices/cheap`、`v2/prices/week-matrix`、`v1/prices/calendar` 帶 `return_date` 也全部回 0 列。
+
+API 有能力回來回票價,但 Aviasales 的快取是自家使用者餵出來的,台灣航線只有單程。
+**倒買法省的就是來回計價,所以它在這個資料源上無法排名** —— 見
+`app/reverse.py`,那個模組只組票不報價。
+
+---
+
+## 回應裡的機場代碼是城市碼
+
+**日期**:2026-08-08 · **方法**:逐一請求機場代碼,比對回傳內容
+
+```
+請求 TPE→KIX → 回 destination "OSA"
+請求 TPE→NRT → 回 destination "TYO"
+請求 TSA→NRT → 回 origin      "TPE"
+```
+
+但**資料本身是分機場的**,城市碼只是標籤:
+
+```
+TPE→NRT (29 列) vs TPE→HND (29 列):交集 0
+TPE→KIX (30 列) vs TPE→ITM (14 列):交集 0
+TPE→OSA (30 列) vs TPE→KIX (30 列):完全相同 → 城市查詢回的是最便宜那個機場
+```
+
+照抄回傳的城市碼當索引,查詢時用機場碼就永遠對不上,整站會在坐擁資料的情況下顯示
+「此航段查無資料」。**重驗**:`tests/test_cached.py::TestAirportCodesSurviveTheRoundTrip`
+
+---
+
 ## 待驗(需要 `TRAVELPAYOUTS_TOKEN`)
 
 拿到 token 後執行:
@@ -97,8 +155,11 @@ python scripts/spike_datasource.py --out ../docs/spike-datasource.md
 
 三個關卡:
 
-- **S1a 單程語義** —— 不帶 `return_date` 拿回來的每日價,是不是真的單程價。
-  若其實錨在來回票上,拼票加總會系統性高估,而且看起來完全合理。
+- **S1a 單程語義** —— ✅ 已通過(2026-08-08)。month-matrix 回的 30 列 `return_date`
+  全是空字串,`number_of_changes: 0`、`duration: 160` 分鐘(TPE→KIX 直飛),
+  所以是單程價,拼票加總成立。
+  ⚠️ 判準不能用「帶不帶 `return_date` 的價差」—— 該參數被端點忽略,兩者回傳完全相同,
+  舊版腳本會從相同的數字推出「所以是來回價」的相反結論。
 - **S1b 覆蓋率** —— 冷門機場可能一列都沒有。這些必須顯示成「查無資料」,
   不能讓組合靜默消失。
 - **S2 排名一致性** —— 判準是**序**不是**值**。快取價穩定偏移 25% 但序不變,

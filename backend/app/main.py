@@ -16,12 +16,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import credentials, refdata, search
+from app import credentials, refdata, reverse, search
 from app.combos import SpecTooLarge
 from app.config import settings
 from app.db import closing_conn, connect, init_db, source_health
 from app.password import PasswordError, change_password
-from app.pricing import deeplinks
+from app.pricing import cached, deeplinks
 from app.pricing.live import get_provider
 from app.combos import Combo, FlightLeg
 
@@ -84,6 +84,24 @@ class LegIn(BaseModel):
     origin: str
     destination: str
     date: date
+
+
+class TripIn(BaseModel):
+    codes: list[str] = Field(..., min_length=1, description="城市或機場 IATA 代碼")
+    depart: date
+    back: date
+    label: str | None = None
+
+
+class ReverseIn(BaseModel):
+    home: list[str] = Field(..., min_length=1)
+    first: TripIn
+    second: TripIn
+    try_both_orders: bool = True
+    # 拆單程那一欄要價格就得先抓。航線只有四段,所以直接在同一個請求裡抓完。
+    warm: bool = True
+    passengers: int = Field(1, ge=1, le=9)
+    cabin: Literal["economy", "premium_economy", "business", "first"] = "economy"
 
 
 class KeysIn(BaseModel):
@@ -280,6 +298,142 @@ def verify(body: VerifyIn) -> dict[str, Any]:
                 combo, passengers=body.passengers, cabin=body.cabin
             ),
         },
+    }
+
+
+# --------------------------------------------------------------------------
+# 倒買法
+# --------------------------------------------------------------------------
+
+def _trip(conn: sqlite3.Connection, spec: TripIn) -> reverse.Trip:
+    airports = refdata.expand_airports(conn, spec.codes)
+    if not airports:
+        raise HTTPException(
+            status_code=400, detail=f"找不到可飛的機場:{', '.join(spec.codes)}"
+        )
+    return reverse.Trip(
+        label=spec.label or airports[0].city_name,
+        airports=tuple(a.code for a in airports),
+        depart=spec.depart,
+        back=spec.back,
+    )
+
+
+@app.post("/api/reverse")
+def reverse_plans(
+    body: ReverseIn, conn: sqlite3.Connection = Depends(get_conn)
+) -> dict[str, Any]:
+    """倒買法:兩趟旅行,三種買法,四段航程重新配對。
+
+    這裡**不排名價格**,而那不是還沒做完。實測 Travelpayouts 對台灣出發的航線
+    一列來回快取都沒有,而倒買法省的就是來回計價 —— 用單程價加總算出來的數字
+    保證看不到那個效果,顯示它比不顯示更糟。只有「四段全拆單程」帶價格。
+    """
+    home = refdata.expand_airports(conn, body.home)
+    if not home:
+        raise HTTPException(status_code=400, detail=f"找不到可飛的機場:{body.home}")
+
+    first, second = _trip(conn, body.first), _trip(conn, body.second)
+    keys = credentials.resolve(conn)
+
+    try:
+        groups = reverse.enumerate_plans(
+            tuple(a.code for a in home), first, second,
+            try_both_orders=body.try_both_orders,
+        )
+    except reverse.TripsOverlap as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SpecTooLarge as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": exc.message, "offender": exc.offender},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # 只有「四段全拆單程」那種買法有價格可算,而它需要的航線很少(四段,不是
+    # 幾千種組合),所以直接在這裡抓完 —— 不像單趟搜尋要拆成 warm / search 兩段。
+    pairs = sorted({(leg.origin, leg.destination) for g in groups for p in g for leg in p.legs})
+    dates = [leg.depart_date for g in groups for p in g for leg in p.legs]
+    months = cached.months_covering(dates)
+
+    warnings: list[str] = []
+    if body.warm:
+        try:
+            outcome = cached.ensure_routes(conn, pairs, months, token=keys.token or None)
+            if outcome.unauthorized:
+                warnings.append("Travelpayouts 拒絕了這組 token,單程價那一欄會是空的。")
+            elif outcome.failures:
+                warnings.append(
+                    f"以下航線沒抓成功:{', '.join(outcome.failed_routes)}"
+                )
+        except cached.MissingToken as exc:
+            warnings.append(str(exc))
+
+    lookup = cached.load_lookup(conn, pairs)
+    fetched = cached.fetched_routes(conn)
+
+    return {
+        "warnings": warnings,
+        "currency": settings.default_currency,
+        "months": months,
+        "route_pairs": len(pairs),
+        "groups": [
+            {
+                "plans": [
+                    _serialise_plan(plan, lookup, fetched, body) for plan in group
+                ]
+            }
+            for group in groups[:REVERSE_GROUP_LIMIT]
+        ],
+        "group_count": len(groups),
+    }
+
+
+REVERSE_GROUP_LIMIT = 12
+
+
+def _serialise_plan(plan, lookup, fetched, body: ReverseIn) -> dict[str, Any]:
+    pricing = None
+    if plan.priceable:
+        combos = [cached.price_combo(t.combo, lookup, fetched) for t in plan.tickets]
+        complete = all(c.is_complete for c in combos)
+        pricing = {
+            "total": sum(c.total or 0 for c in combos) if complete else None,
+            "source": "cache" if complete else None,
+            "missing": [
+                f"{leg.origin}→{leg.destination}"
+                for c in combos
+                for leg in c.missing_legs
+            ],
+        }
+
+    return {
+        "method": plan.method,
+        "method_label": plan.method_label,
+        "priceable": plan.priceable,
+        "unavailable_reason": plan.unavailable_reason,
+        "pricing": pricing,
+        "risks": reverse.risks(plan),
+        "tickets": [
+            {
+                "label": ticket.label,
+                "role": ticket.role,
+                "open_jaw": ticket.is_open_jaw,
+                "legs": [
+                    {
+                        "origin": leg.origin,
+                        "destination": leg.destination,
+                        "date": leg.depart_date.isoformat(),
+                    }
+                    for leg in ticket.legs
+                ],
+                "links": deeplinks.links_for_single_ticket(
+                    ticket.combo, passengers=body.passengers, cabin=body.cabin
+                ),
+            }
+            for ticket in plan.tickets
+        ],
     }
 
 

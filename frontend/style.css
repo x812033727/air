@@ -706,3 +706,110 @@ a.chip { text-decoration: none; }
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
+
+/* ---- Mode switch ------------------------------------------------------ */
+
+.modes {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.modes__tab {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  padding: 0.7rem 1.1rem;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+
+.modes__tab:hover { color: var(--airway); }
+
+.modes__tab[aria-selected="true"] {
+  color: var(--airway);
+  border-bottom-color: var(--airway);
+  font-weight: 600;
+}
+
+.reverse__intro {
+  margin: 0 0 1.25rem;
+  font-size: 0.9rem;
+  color: var(--ink-soft);
+  max-width: 48rem;
+}
+
+.reverse__intro strong { color: var(--ink); font-weight: 600; }
+
+/* ---- Buying methods --------------------------------------------------- */
+
+.method {
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+/* 倒買法是這一頁的主角,給它跟「最便宜那列」同樣的左邊框 */
+.method--reverse { border-color: var(--airway); border-left-width: 3px; }
+
+.method__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.method__name { font-weight: 600; }
+
+.method__price {
+  font-family: var(--mono);
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.method__noprice {
+  font-family: var(--han);
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+  max-width: 30rem;
+  text-align: right;
+}
+
+/* One ticket: role label, route line, links. */
+.ticket {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+  padding: 0.8rem 0;
+  border-top: 1px dashed var(--rule);
+  align-items: start;
+  min-width: 0;
+}
+
+.ticket__role {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  padding-top: 0.2rem;
+}
+
+.ticket__role b { display: block; color: var(--airway); font-weight: 600; }
+
+.ticket__body { min-width: 0; display: grid; gap: 0.5rem; }
+
+.ticket__links { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+@media (max-width: 860px) {
+  .ticket { grid-template-columns: minmax(0, 1fr); }
+  .method__noprice { text-align: left; }
+}

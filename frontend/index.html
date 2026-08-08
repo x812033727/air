@@ -94,7 +94,16 @@
     </div>
   </section>
 
-  <section class="panel" aria-labelledby="plan-heading">
+  <div class="modes" role="tablist" aria-label="規劃方式">
+    <button type="button" class="modes__tab" id="mode-single" role="tab" aria-selected="true">
+      一趟旅行・開口
+    </button>
+    <button type="button" class="modes__tab" id="mode-reverse" role="tab" aria-selected="false">
+      兩趟旅行・倒買法
+    </button>
+  </div>
+
+  <section class="panel" id="single-panel" aria-labelledby="plan-heading">
     <h2 class="eyebrow" id="plan-heading">行程</h2>
 
     <form id="plan" class="plan">
@@ -139,7 +148,50 @@
     </form>
   </section>
 
+  <section class="panel" id="reverse-panel" hidden aria-labelledby="reverse-heading">
+    <h2 class="eyebrow" id="reverse-heading">兩趟旅行</h2>
+
+    <p class="reverse__intro">
+      同樣去兩次,把四段航程重新配對成兩張<strong>交叉的開口來回票</strong>。
+      省錢的來源是「來回票價不是兩張單程相加」—— 航空公司按航點組合定價。
+      <strong>第二趟必須整個在第一趟之後</strong>,因為同一張票上的兩段必須依序使用。
+    </p>
+
+    <form id="reverse-form">
+      <div class="stopchain" id="reverse-chain"></div>
+
+      <div class="controls">
+        <label class="field field--narrow">
+          <span class="field__label">人數</span>
+          <input type="number" id="rev-passengers" min="1" max="9" value="1">
+        </label>
+        <label class="field">
+          <span class="field__label">艙等</span>
+          <select id="rev-cabin">
+            <option value="economy">經濟艙</option>
+            <option value="premium_economy">豪華經濟艙</option>
+            <option value="business">商務艙</option>
+            <option value="first">頭等艙</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="plan__submit">
+        <button type="submit" class="btn btn--primary" id="rev-submit">組票</button>
+        <p class="plan__cost" id="rev-hint"></p>
+      </div>
+    </form>
+  </section>
+
   <section id="notices" class="notices" aria-live="polite"></section>
+
+  <section id="reverse-results" class="results" hidden aria-labelledby="rev-results-heading">
+    <div class="results__head">
+      <h2 class="eyebrow" id="rev-results-heading">三種買法</h2>
+      <p class="results__summary" id="rev-summary"></p>
+    </div>
+    <div id="rev-list"></div>
+  </section>
 
   <section id="results" class="results" aria-labelledby="results-heading" hidden>
     <div class="results__head">

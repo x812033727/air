@@ -22,8 +22,31 @@ from app.config import settings
 
 CABIN_CODES = {"economy": 1, "premium_economy": 2, "business": 3, "first": 4}
 
+TRIP_ROUND_TRIP = 1
 TRIP_ONE_WAY = 2
 TRIP_MULTI_CITY = 3
+
+
+def _trip_type(legs: Sequence[FlightLeg]) -> int:
+    """Which of Google's three search modes this itinerary is.
+
+    A there-and-back pair must go out as a round trip, not multi-city. Both
+    render the same fields, but Google prices them differently — a round-trip
+    fare is constructed as one journey, a multi-city one is not. Sending a
+    plain round trip as multi-city inflates it, which would quietly bias the
+    倒買法 comparison against the ordinary way of buying. Verified in a
+    browser: trip=1 shows 「Round trip」 with a Return field, trip=3 shows
+    「Multi-city」.
+    """
+    if len(legs) == 1:
+        return TRIP_ONE_WAY
+    if (
+        len(legs) == 2
+        and legs[0].origin == legs[1].destination
+        and legs[0].destination == legs[1].origin
+    ):
+        return TRIP_ROUND_TRIP
+    return TRIP_MULTI_CITY
 
 
 # --------------------------------------------------------------------------
@@ -93,7 +116,7 @@ def google_flights_url(
     body = b"".join(_message_field(_GF_LEG, _google_leg(leg)) for leg in legs)
     body += b"".join(_varint_field(_GF_PASSENGER, 1) for _ in range(max(1, passengers)))
     body += _varint_field(_GF_SEAT, CABIN_CODES.get(cabin, 1))
-    body += _varint_field(_GF_TRIP, TRIP_ONE_WAY if len(legs) == 1 else TRIP_MULTI_CITY)
+    body += _varint_field(_GF_TRIP, _trip_type(legs))
     tfs = base64.urlsafe_b64encode(body).decode().rstrip("=")
     return f"https://www.google.com/travel/flights?tfs={tfs}&curr={settings.default_currency}&hl=zh-TW"
 
