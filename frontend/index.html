@@ -20,6 +20,34 @@
   </div>
 </header>
 
+<!-- The key lives in this browser and rides along with each search. The site is
+     public and has no login, so anything stored server-side would be readable
+     by whoever found this panel. -->
+<details class="keys" id="keys">
+  <summary class="keys__summary">查價金鑰</summary>
+  <div class="keys__body">
+    <p class="keys__note">
+      填了才有價格可以排名。金鑰<strong>只存在這台瀏覽器</strong>,查價時隨請求送出,
+      伺服器用完就忘、不會寫進硬碟。換一台裝置要再填一次。
+    </p>
+    <div class="keys__fields">
+      <label class="field">
+        <span class="field__label">Travelpayouts token</span>
+        <input type="password" id="key-token" autocomplete="off" spellcheck="false"
+               placeholder="Profile → API token">
+      </label>
+      <label class="field">
+        <span class="field__label">Marker(選填)</span>
+        <input type="text" id="key-marker" autocomplete="off" spellcheck="false"
+               inputmode="numeric" placeholder="聯盟連結裡 marker= 後面那串">
+      </label>
+      <button type="button" class="btn btn--primary" id="key-save">儲存</button>
+      <button type="button" class="btn btn--ghost" id="key-clear">清除</button>
+    </div>
+    <p class="keys__state" id="key-state"></p>
+  </div>
+</details>
+
 <main>
 
   <!-- The route line is the product: a trip you fly, break, and fly again. -->

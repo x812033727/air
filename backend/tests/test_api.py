@@ -168,7 +168,7 @@ class TestHonestGaps:
 
         assert body["results"] == []
         assert body["unpriceable"], "查無價格的組合必須被回傳,不能靜默消失"
-        assert any("TRAVELPAYOUTS_TOKEN" in w for w in body["warnings"])
+        assert any("Travelpayouts token" in w for w in body["warnings"])
         assert all(
             leg["status"] == "not_fetched"
             for combo in body["unpriceable"]
@@ -178,6 +178,42 @@ class TestHonestGaps:
     def test_routes_that_returned_nothing_are_named_in_the_warnings(self, client, priced):
         body = client.post("/api/search", json=JAPAN_SEARCH).json()
         assert any("查無任何價格" in w for w in body["warnings"])
+
+
+class TestPerRequestCredentials:
+    """站台是公開的、沒有登入。金鑰存在伺服器就等於任何找到設定頁的人都讀得走,
+    所以由瀏覽器保管、隨請求送出,伺服器用完就忘。"""
+
+    def test_a_token_in_the_header_silences_the_no_token_warning(self, client):
+        body = client.post(
+            "/api/search", json=JAPAN_SEARCH,
+            headers={"X-Travelpayouts-Token": "supplied-by-the-browser"},
+        ).json()
+        assert not any("Travelpayouts token" in w for w in body["warnings"])
+
+    def test_without_a_token_the_warning_names_where_to_put_one(self, client):
+        body = client.post("/api/search", json=JAPAN_SEARCH).json()
+        assert any("Travelpayouts token" in w for w in body["warnings"])
+
+    def test_the_marker_reaches_the_affiliate_links(self, client, priced):
+        body = client.post(
+            "/api/search", json=JAPAN_SEARCH,
+            headers={"X-Travelpayouts-Marker": "654321"},
+        ).json()
+        aviasales = body["results"][0]["links"]["single_ticket"]["aviasales"]
+        assert aviasales.endswith("?marker=654321")
+
+    def test_no_marker_means_a_plain_link_rather_than_a_broken_one(self, client, priced):
+        body = client.post("/api/search", json=JAPAN_SEARCH).json()
+        assert "marker=" not in body["results"][0]["links"]["single_ticket"]["aviasales"]
+
+    def test_the_marker_reaches_the_per_leg_links_too(self, client, priced):
+        body = client.post(
+            "/api/search", json=JAPAN_SEARCH,
+            headers={"X-Travelpayouts-Marker": "654321"},
+        ).json()
+        for leg in body["results"][0]["links"]["split"]:
+            assert leg["aviasales"].endswith("?marker=654321")
 
 
 class TestPayloadSize:
@@ -217,7 +253,7 @@ class TestWarm:
     def test_warm_reports_missing_token_rather_than_failing(self, client):
         response = client.post("/api/search/warm", json=JAPAN_SEARCH)
         assert response.status_code == 200
-        assert any("TRAVELPAYOUTS_TOKEN" in w for w in response.json()["warnings"])
+        assert any("Travelpayouts token" in w for w in response.json()["warnings"])
 
     def test_warm_is_bounded_by_the_same_guardrails(self, client):
         payload = dict(JAPAN_SEARCH, depart_earliest="2026-10-01", depart_latest="2026-12-01")

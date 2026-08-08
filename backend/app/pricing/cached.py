@@ -129,6 +129,25 @@ class FetchOutcome:
     def failed_routes(self) -> list[str]:
         return sorted({f"{o}→{d}" for (o, d, _) in self.failures})
 
+    @property
+    def unauthorized(self) -> bool:
+        """Nothing came back and everything was rejected — the key is the problem.
+
+        Reporting a mistyped token as "these 20 routes didn't come back" sends
+        the user hunting for a network fault that isn't there. The converse
+        matters just as much: if even one route succeeded the key is clearly
+        valid, so a 401 on the rest is something else and must not be blamed
+        on the token.
+        """
+        return (
+            bool(self.failures)
+            and not self.counts
+            and all(
+                "401" in message or "403" in message
+                for message in self.failures.values()
+            )
+        )
+
 
 def ensure_routes(
     conn: sqlite3.Connection,
@@ -138,6 +157,7 @@ def ensure_routes(
     currency: str | None = None,
     client: httpx.Client | None = None,
     force: bool = False,
+    token: str | None = None,
 ) -> FetchOutcome:
     """Fetch every (route, month) that isn't already cached and fresh.
 
@@ -154,12 +174,19 @@ def ensure_routes(
 
     Row counts come back including the zeros, because a caller has to tell
     "we looked and there was nothing" from "we never looked".
+
+    ``token`` lets a caller supply the key per request. The site is public and
+    unauthenticated, so storing a key server-side would leave it readable by
+    anyone who finds the settings page; instead the browser keeps it and sends
+    it with the search. The configured key stays as a fallback.
     """
     currency = currency or settings.default_currency
-    if not settings.travelpayouts_token:
+    token = (token or settings.travelpayouts_token).strip()
+    if not token:
         raise MissingToken(
-            "缺少 TRAVELPAYOUTS_TOKEN,層一查價無法運作。"
-            "請到 travelpayouts.com 註冊 affiliate 帳號取得 token 並寫進 .env。"
+            "還沒有 Travelpayouts token,無法查價。"
+            "到 travelpayouts.com 註冊 affiliate 帳號取得 token,"
+            "填進頁面右上角的「設定」即可(只存在你的瀏覽器裡)。"
         )
 
     owns_client = client is None
@@ -175,7 +202,7 @@ def ensure_routes(
                     continue
                 try:
                     counts[key] = _fetch_route_month(
-                        conn, client, origin, destination, month, currency
+                        conn, client, origin, destination, month, currency, token
                     )
                 except Exception as exc:  # noqa: BLE001 — recorded, not swallowed
                     failures[key] = f"{type(exc).__name__}: {exc}"
@@ -224,6 +251,7 @@ def _fetch_route_month(
     destination: str,
     month: str,
     currency: str,
+    token: str,
 ) -> int:
     endpoint = settings.price_month_endpoint
     url, params = _build_request(endpoint, origin, destination, month, currency)
@@ -233,7 +261,7 @@ def _fetch_route_month(
             url,
             params=params,
             headers={
-                "X-Access-Token": settings.travelpayouts_token,
+                "X-Access-Token": token,
                 "Accept-Encoding": "gzip, deflate",
             },
         )

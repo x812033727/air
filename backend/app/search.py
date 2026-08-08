@@ -136,7 +136,9 @@ def _latest_return(request: SearchRequest) -> date:
     return request.depart_latest + timedelta(days=longest_stay)
 
 
-def warm(conn: sqlite3.Connection, request: SearchRequest) -> dict[str, Any]:
+def warm(
+    conn: sqlite3.Connection, request: SearchRequest, *, token: str | None = None
+) -> dict[str, Any]:
     """Fetch the route-months this search needs, and report what came back.
 
     Kept separate from :func:`run` because it is the slow half: 20–40 sequential
@@ -149,11 +151,18 @@ def warm(conn: sqlite3.Connection, request: SearchRequest) -> dict[str, Any]:
     warnings: list[str] = []
     outcome = cached.FetchOutcome(counts={}, failures={})
     try:
-        outcome = cached.ensure_routes(conn, pairs, months, currency=request.currency)
+        outcome = cached.ensure_routes(
+            conn, pairs, months, currency=request.currency, token=token
+        )
     except cached.MissingToken as exc:
         warnings.append(str(exc))
 
-    if outcome.failures:
+    if outcome.unauthorized:
+        warnings.append(
+            "Travelpayouts 拒絕了這組 token(全部航線都回 401/403)。"
+            "請確認金鑰有沒有貼錯,以及帳號是否已加入 Aviasales 聯盟方案。"
+        )
+    elif outcome.failures:
         # Name them. "搜尋沒有成功" with no detail is the same dead end as a
         # blank price cell — the user can't tell a throttled route from a
         # route with no cheap flights.
@@ -185,6 +194,8 @@ def run(
     *,
     fetch: bool = False,
     limit: int = MAX_RESULTS,
+    token: str | None = None,
+    marker: str = "",
 ) -> dict[str, Any]:
     """Rank every combination, but serialise only the ones worth showing.
 
@@ -203,13 +214,15 @@ def run(
     warnings: list[str] = []
     if fetch:
         try:
-            cached.ensure_routes(conn, pairs, months, currency=request.currency)
+            cached.ensure_routes(
+                conn, pairs, months, currency=request.currency, token=token
+            )
         except cached.MissingToken as exc:
             warnings.append(str(exc))
-    elif not settings.has_cached_prices:
+    elif not (token or settings.has_cached_prices):
         warnings.append(
-            "尚未設定 TRAVELPAYOUTS_TOKEN,無法取得價格。"
-            "以下只列出行程組合,請用每列的連結自行查價。"
+            "還沒有 Travelpayouts token,所以沒有價格可以排名。"
+            "以下只列出行程組合,票價請用每列的連結查。"
         )
 
     lookup = cached.load_lookup(conn, pairs, request.currency)
@@ -242,17 +255,26 @@ def run(
             "unpriceable": len(unpriced),
             "shown": min(len(ranked), limit),
         },
-        "results": [_serialise(p, request, cheapest_baseline) for p in ranked[:limit]],
-        "baselines": [_serialise(p, request, None) for p in baselines[:BASELINE_LIMIT]],
+        "results": [
+            _serialise(p, request, cheapest_baseline, marker) for p in ranked[:limit]
+        ],
+        "baselines": [
+            _serialise(p, request, None, marker) for p in baselines[:BASELINE_LIMIT]
+        ],
         # A sample, plus the full count above. Enough to show what a gap looks
         # like without shipping thousands of rows nobody will read.
-        "unpriceable": [_serialise(p, request, None) for p in unpriced[:UNPRICEABLE_SAMPLE]],
+        "unpriceable": [
+            _serialise(p, request, None, marker) for p in unpriced[:UNPRICEABLE_SAMPLE]
+        ],
         "warnings": warnings,
     }
 
 
 def _serialise(
-    pricing: ComboPricing, request: SearchRequest, baseline_total: float | None
+    pricing: ComboPricing,
+    request: SearchRequest,
+    baseline_total: float | None,
+    marker: str = "",
 ) -> dict[str, Any]:
     combo = pricing.combo
     total = pricing.total
@@ -292,10 +314,10 @@ def _serialise(
         "risks": risks(combo, request),
         "links": {
             "single_ticket": deeplinks.links_for_single_ticket(
-                combo, passengers=request.passengers, cabin=request.cabin
+                combo, passengers=request.passengers, cabin=request.cabin, marker=marker
             ),
             "split": deeplinks.links_for_split_tickets(
-                combo, passengers=request.passengers, cabin=request.cabin
+                combo, passengers=request.passengers, cabin=request.cabin, marker=marker
             ),
         },
     }

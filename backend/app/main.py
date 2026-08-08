@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -174,22 +174,46 @@ def _guarded(call):
         ) from exc
 
 
+# The site is public and has no login, so a key kept server-side would be
+# readable by anyone who found the settings page. The browser holds it instead
+# and sends it per request; the server uses it and forgets it. A key in .env
+# still works as a fallback for everyone.
+TokenHeader = Header(default=None, alias="X-Travelpayouts-Token")
+MarkerHeader = Header(default=None, alias="X-Travelpayouts-Marker")
+
+
 @app.post("/api/search/warm")
-def warm_search(body: SearchIn, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
+def warm_search(
+    body: SearchIn,
+    conn: sqlite3.Connection = Depends(get_conn),
+    x_travelpayouts_token: str | None = TokenHeader,
+) -> dict[str, Any]:
     """預抓這次搜尋需要的航線月份資料。
 
     這是慢的那一半 —— 20–40 次連續外呼。跟 `/api/search` 分開,是為了讓頁面
     能顯示進度,而不是讓使用者對著一個十幾秒沒有回應的請求乾等。
     """
     request = _to_request(body, conn)
-    return _guarded(lambda: search.warm(conn, request))
+    return _guarded(lambda: search.warm(conn, request, token=x_travelpayouts_token))
 
 
 @app.post("/api/search")
-def run_search(body: SearchIn, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
+def run_search(
+    body: SearchIn,
+    conn: sqlite3.Connection = Depends(get_conn),
+    x_travelpayouts_token: str | None = TokenHeader,
+    x_travelpayouts_marker: str | None = MarkerHeader,
+) -> dict[str, Any]:
     """從快取排名並回傳結果。不外呼,所以是即時的。"""
     request = _to_request(body, conn)
-    return _guarded(lambda: search.run(conn, request))
+    return _guarded(
+        lambda: search.run(
+            conn,
+            request,
+            token=x_travelpayouts_token,
+            marker=(x_travelpayouts_marker or settings.travelpayouts_marker or ""),
+        )
+    )
 
 
 @app.post("/api/verify")

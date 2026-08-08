@@ -139,17 +139,23 @@ def aviasales_url(
 # Assembly
 # --------------------------------------------------------------------------
 
-def links_for_single_ticket(combo: Combo, *, passengers: int = 1, cabin: str = "economy") -> dict[str, str]:
+def links_for_single_ticket(
+    combo: Combo, *, passengers: int = 1, cabin: str = "economy", marker: str | None = None
+) -> dict[str, str]:
     """Links that price the whole itinerary as one ticket."""
     return {
         "google_flights": google_flights_url(combo.legs, passengers=passengers, cabin=cabin),
         "kayak": kayak_url(combo.legs, passengers=passengers, cabin=cabin),
-        "aviasales": aviasales_url(combo.legs, passengers=passengers),
+        "aviasales": aviasales_url(combo.legs, passengers=passengers, marker=marker),
     }
 
 
 def links_for_split_tickets(
-    combo: Combo, *, passengers: int = 1, cabin: str = "economy"
+    combo: Combo,
+    *,
+    passengers: int = 1,
+    cabin: str = "economy",
+    marker: str | None = None,
 ) -> list[dict[str, str]]:
     """One set of links per leg — this is the 拼票 買法.
 
@@ -163,7 +169,7 @@ def links_for_split_tickets(
             "date": leg.depart_date.isoformat(),
             "google_flights": google_flights_url([leg], passengers=passengers, cabin=cabin),
             "kayak": kayak_url([leg], passengers=passengers, cabin=cabin),
-            "aviasales": aviasales_url([leg], passengers=passengers),
+            "aviasales": aviasales_url([leg], passengers=passengers, marker=marker),
         }
         for leg in combo.legs
     ]

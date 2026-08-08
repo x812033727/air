@@ -57,7 +57,15 @@ python -m pytest -q
 python scripts/spike_datasource.py --out ../docs/spike-datasource.md
 ```
 
-## 設定
+## 金鑰放哪裡
 
-複製 `.env.example` 成 `.env` 後填寫。沒有任何金鑰時:參考資料層與深連結
-完全可用,層一查價會明確報錯而不是安靜地回空。
+站台是**公開的、沒有登入**,所以金鑰預設不存在伺服器上:網頁右上「查價金鑰」
+面板填入後存在該瀏覽器的 localStorage,查價時當成 `X-Travelpayouts-Token`
+標頭送出,伺服器用完就忘。換裝置要再填一次,這是刻意的代價 —— 存在伺服器就等於
+任何找到面板的人都讀得走。
+
+`.env` 裡的 `TRAVELPAYOUTS_TOKEN` 仍然有效,當成備援;填了就是**對所有訪客生效**,
+也就是大家共用你的 API 額度。
+
+沒有任何金鑰時:參考資料層與深連結完全可用,查價會明確說「還沒有 token」而不是
+安靜地回空。

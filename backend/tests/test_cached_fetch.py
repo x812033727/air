@@ -188,3 +188,48 @@ class TestPartialFailure:
         """抓失敗不能被當成「查過了」,否則六小時內都不會再試。"""
         self._run(conn)
         assert cached._is_fresh(conn, "TPE", "HND", "2026-10", "TWD") is False
+
+
+class TestRejectedKey:
+    """token 打錯時,「這 20 條航線沒回來」會讓人去找根本不存在的網路問題。"""
+
+    def _run(self, conn, error):
+        client = ScriptedClient({("TPE", "NRT"): error, ("TPE", "KIX"): error})
+        outcome = cached.ensure_routes(
+            conn, [("TPE", "NRT"), ("TPE", "KIX")], ["2026-10"],
+            currency="TWD", client=client,
+        )
+        conn.rollback()
+        return outcome
+
+    def test_all_routes_rejected_is_reported_as_a_key_problem(self, conn):
+        outcome = self._run(conn, RuntimeError("Client error '401 Unauthorized' for url ..."))
+        assert outcome.unauthorized is True
+
+    def test_a_forbidden_response_counts_too(self, conn):
+        outcome = self._run(conn, RuntimeError("Client error '403 Forbidden' for url ..."))
+        assert outcome.unauthorized is True
+
+    def test_a_timeout_is_not_a_key_problem(self, conn):
+        outcome = self._run(conn, RuntimeError("ReadTimeout"))
+        assert outcome.unauthorized is False
+
+    def test_a_partial_failure_is_not_a_key_problem(self, conn):
+        """有些成功、有些 401,那就不是金鑰整體無效,別誤導使用者去換 token。"""
+        client = ScriptedClient({
+            ("TPE", "NRT"): month_matrix(6800),
+            ("TPE", "KIX"): RuntimeError("Client error '401 Unauthorized' for url ..."),
+        })
+        outcome = cached.ensure_routes(
+            conn, [("TPE", "NRT"), ("TPE", "KIX")], ["2026-10"],
+            currency="TWD", client=client,
+        )
+        conn.rollback()
+        assert outcome.unauthorized is False
+
+    def test_no_failures_at_all_is_not_a_key_problem(self, conn):
+        client = ScriptedClient({("TPE", "NRT"): month_matrix(6800)})
+        outcome = cached.ensure_routes(
+            conn, [("TPE", "NRT")], ["2026-10"], currency="TWD", client=client
+        )
+        assert outcome.unauthorized is False

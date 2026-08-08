@@ -22,6 +22,30 @@ const $ = (selector) => document.querySelector(selector);
 
 /* ---------------------------------------------------------------- fetch */
 
+/* 金鑰只存在這台瀏覽器,查價時當成標頭送出。站台是公開的、沒有登入,
+ * 存在伺服器上的金鑰等於任何找到設定面板的人都讀得走。 */
+const KEY_STORE = "air.travelpayouts";
+
+function loadKeys() {
+  try {
+    return JSON.parse(localStorage.getItem(KEY_STORE) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveKeys(keys) {
+  localStorage.setItem(KEY_STORE, JSON.stringify(keys));
+}
+
+function authHeaders() {
+  const { token, marker } = loadKeys();
+  const headers = {};
+  if (token) headers["X-Travelpayouts-Token"] = token;
+  if (marker) headers["X-Travelpayouts-Marker"] = marker;
+  return headers;
+}
+
 async function api(path, options) {
   const response = await fetch(API + path, options);
   const body = await response.json().catch(() => ({}));
@@ -456,7 +480,7 @@ function showNotice(title, text, tone = "info", topic = null) {
 
 /** Warnings about the same underlying problem share a topic. */
 function topicOf(warning) {
-  if (warning.includes("TRAVELPAYOUTS_TOKEN")) return "no-token";
+  if (warning.includes("Travelpayouts token")) return "no-token";
   if (warning.includes("查無任何價格")) return "empty-routes";
   return warning;
 }
@@ -521,7 +545,7 @@ async function runSearch(event) {
     button.textContent = "抓價中…";
     const warmed = await api("/api/search/warm", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(body),
     });
     for (const warning of warmed.warnings || []) {
@@ -531,7 +555,7 @@ async function runSearch(event) {
     button.textContent = "排名中…";
     const result = await api("/api/search", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify(body),
     });
     state.lastSearch = result;
@@ -591,11 +615,12 @@ async function loadStatus() {
     strip.replaceChildren();
 
     state.hasLivePricing = health.config.live_provider !== "deeplink";
-    const pricing = health.config.cached_prices;
+    // 金鑰可能來自這台瀏覽器,也可能來自伺服器的 .env —— 兩者都算接上了。
+    const pricing = Boolean(loadKeys().token) || health.config.cached_prices;
     const chip = el(
       "span",
       `chip chip--quiet${pricing ? "" : " chip--alert"}`,
-      pricing ? "查價已接上" : "尚未接查價來源"
+      pricing ? "查價已接上" : "尚未填金鑰"
     );
     strip.append(chip);
     strip.append(el("span", "chip chip--quiet", health.config.currency));
@@ -608,13 +633,59 @@ async function loadStatus() {
     if (!pricing) {
       showNotice(
         "還沒有價格",
-        "尚未設定 Travelpayouts token,所以沒辦法自動比價排名。下面仍然會列出所有可行的行程組合,每一列都有連結可以直接去看真價。",
-        "info"
+        "打開上方的「查價金鑰」填入 Travelpayouts token,就能自動比價排名。" +
+          "在那之前站台仍會列出所有可行的行程組合,每一列都有連結可以直接去看真價。",
+        "info",
+        "no-token"
       );
     }
   } catch (error) {
     $("#status-text").textContent = "後端沒有回應";
   }
+}
+
+/** 只顯示金鑰的頭尾,中間遮掉 —— 讓你確認填的是哪一組,又不必把它整串
+ *  攤在螢幕上。 */
+function maskKey(token) {
+  if (!token) return "";
+  return token.length <= 8 ? "••••" : `${token.slice(0, 4)}…${token.slice(-4)}`;
+}
+
+function renderKeyState() {
+  const { token, marker } = loadKeys();
+  const state_ = $("#key-state");
+  if (token) {
+    state_.className = "keys__state keys__state--ok";
+    state_.textContent =
+      `已儲存 token ${maskKey(token)}` + (marker ? ` · marker ${marker}` : " · 未填 marker");
+  } else {
+    state_.className = "keys__state";
+    state_.textContent = "尚未填入,目前沒有價格可以排名";
+  }
+  $("#key-token").value = token || "";
+  $("#key-marker").value = marker || "";
+}
+
+function wireKeyPanel() {
+  renderKeyState();
+
+  $("#key-save").addEventListener("click", () => {
+    const token = $("#key-token").value.trim();
+    const marker = $("#key-marker").value.trim();
+    saveKeys({ token, marker });
+    renderKeyState();
+    loadStatus();
+    if (token) {
+      $("#keys").open = false;
+      showNotice("金鑰已儲存", "再按一次「找組合」就會帶著它去查價。", "info", "keys-saved");
+    }
+  });
+
+  $("#key-clear").addEventListener("click", () => {
+    localStorage.removeItem(KEY_STORE);
+    renderKeyState();
+    loadStatus();
+  });
 }
 
 function newStop(country) {
@@ -645,6 +716,7 @@ async function init() {
     japan2.nights_max = 3;
   }
 
+  wireKeyPanel();
   await renderPlan();
   $("#plan").addEventListener("submit", runSearch);
   $("#add-stop").addEventListener("click", () => {
