@@ -90,6 +90,15 @@ CREATE TABLE IF NOT EXISTS route_fetch (
     PRIMARY KEY (origin, destination, month, currency)
 );
 
+-- 站台設定(目前只有查價金鑰)。金鑰原本刻意只放在瀏覽器,因為公開站台上的
+-- 伺服器端金鑰等於誰都讀得走;站台加上密碼保護之後那個理由消失了,而「在網頁上
+-- 存好卻只有那台瀏覽器算數」對使用者來說就只是壞掉。
+CREATE TABLE IF NOT EXISTS app_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fetch_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     source      TEXT NOT NULL,

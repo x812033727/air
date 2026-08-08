@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import refdata, search
+from app import credentials, refdata, search
 from app.combos import SpecTooLarge
 from app.config import settings
 from app.db import closing_conn, connect, init_db, source_health
@@ -84,6 +84,11 @@ class LegIn(BaseModel):
     origin: str
     destination: str
     date: date
+
+
+class KeysIn(BaseModel):
+    token: str = ""
+    marker: str = ""
 
 
 class PasswordIn(BaseModel):
@@ -180,10 +185,9 @@ def _guarded(call):
         ) from exc
 
 
-# The site is public and has no login, so a key kept server-side would be
-# readable by anyone who found the settings page. The browser holds it instead
-# and sends it per request; the server uses it and forgets it. A key in .env
-# still works as a fallback for everyone.
+# A key sent with the request wins over the saved one, and is not persisted —
+# it's the one-off override. The saved key (and then .env) covers everything
+# else. See app/credentials.py for why the saved key is now the default.
 TokenHeader = Header(default=None, alias="X-Travelpayouts-Token")
 MarkerHeader = Header(default=None, alias="X-Travelpayouts-Marker")
 
@@ -200,7 +204,8 @@ def warm_search(
     能顯示進度,而不是讓使用者對著一個十幾秒沒有回應的請求乾等。
     """
     request = _to_request(body, conn)
-    return _guarded(lambda: search.warm(conn, request, token=x_travelpayouts_token))
+    resolved = credentials.resolve(conn, header_token=x_travelpayouts_token)
+    return _guarded(lambda: search.warm(conn, request, token=resolved.token or None))
 
 
 @app.post("/api/search")
@@ -212,12 +217,15 @@ def run_search(
 ) -> dict[str, Any]:
     """從快取排名並回傳結果。不外呼,所以是即時的。"""
     request = _to_request(body, conn)
+    resolved = credentials.resolve(
+        conn, header_token=x_travelpayouts_token, header_marker=x_travelpayouts_marker
+    )
     return _guarded(
         lambda: search.run(
             conn,
             request,
-            token=x_travelpayouts_token,
-            marker=(x_travelpayouts_marker or settings.travelpayouts_marker or ""),
+            token=resolved.token or None,
+            marker=resolved.marker,
         )
     )
 
@@ -276,6 +284,41 @@ def verify(body: VerifyIn) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------
+# Keys
+# --------------------------------------------------------------------------
+
+@app.get("/api/keys")
+def read_keys(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
+    """What key the site will use, and where it came from — never the key itself."""
+    resolved = credentials.resolve(conn)
+    return {
+        "configured": resolved.configured,
+        "masked_token": resolved.masked_token,
+        "marker": resolved.marker,
+        "source": resolved.source,
+    }
+
+
+@app.put("/api/keys")
+def write_keys(body: KeysIn, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
+    """Save the key on the server.
+
+    It used to live only in the browser, because a key stored server-side on a
+    public site is readable by anyone who finds the settings panel. The site is
+    behind a password now, so that reason is gone — and "saved on the website"
+    meaning "only on this one browser" is indistinguishable from broken.
+    """
+    credentials.store(conn, token=body.token, marker=body.marker)
+    return read_keys(conn)
+
+
+@app.delete("/api/keys")
+def delete_keys(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
+    credentials.clear(conn)
+    return read_keys(conn)
+
+
+# --------------------------------------------------------------------------
 # Account
 # --------------------------------------------------------------------------
 
@@ -323,6 +366,7 @@ def health(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         for table in ("countries", "cities", "airports", "price_cache")
     }  # noqa: S608 — table names are a fixed literal tuple, not user input
     sources = source_health(conn)
+    keys = credentials.resolve(conn)
     reference_ready = counts["airports"] > 0
     return {
         "status": "ok" if reference_ready else "degraded",
@@ -330,7 +374,8 @@ def health(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
         "row_counts": counts,
         "sources": sources,
         "config": {
-            "cached_prices": settings.has_cached_prices,
+            "cached_prices": keys.configured,
+            "key_source": keys.source,
             "live_prices": settings.has_live_prices,
             "live_provider": get_provider().name,
             "price_month_endpoint": settings.price_month_endpoint,

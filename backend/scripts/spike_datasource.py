@@ -34,6 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import httpx  # noqa: E402
 
 from app.config import settings  # noqa: E402
+from app import credentials  # noqa: E402
+from app.db import closing_conn, init_db  # noqa: E402
 from app.pricing import deeplinks  # noqa: E402
 from app.pricing.cached import BASE_URL, parse_month_payload  # noqa: E402
 from app.combos import FlightLeg  # noqa: E402
@@ -321,12 +323,18 @@ def main() -> int:
     parser.add_argument("--out", default=None, help="把報告寫成 markdown 檔")
     args = parser.parse_args()
 
-    if not settings.travelpayouts_token:
+    # 金鑰現在存在資料庫裡(網頁上填的),環境變數只是備援。這個腳本從 shell 跑,
+    # 所以兩邊都要看,否則「網頁上明明填好了」卻跑不動。
+    init_db()
+    with closing_conn() as conn:
+        resolved = credentials.resolve(conn)
+
+    if not resolved.token:
         print(
             "缺少 TRAVELPAYOUTS_TOKEN。\n"
             "  1. 到 https://www.travelpayouts.com 註冊 affiliate 帳號\n"
             "  2. 取得 API token\n"
-            "  3. 寫進 /opt/air/.env 的 TRAVELPAYOUTS_TOKEN,再重跑本腳本\n\n"
+            "  3. 填進網頁的「查價金鑰」面板(或 /opt/air/.env),再重跑本腳本\n\n"
             "在拿到 token 之前,層一(快取價排名)無法運作;"
             "深連結與參考資料層則不受影響。",
             file=sys.stderr,
@@ -335,7 +343,7 @@ def main() -> int:
 
     month = args.month or _default_month()
     endpoint = args.endpoint or settings.price_month_endpoint
-    probe = Probe(settings.travelpayouts_token, settings.default_currency)
+    probe = Probe(resolved.token, settings.default_currency)
 
     try:
         report = [

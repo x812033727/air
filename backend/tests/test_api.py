@@ -181,8 +181,8 @@ class TestHonestGaps:
 
 
 class TestPerRequestCredentials:
-    """站台是公開的、沒有登入。金鑰存在伺服器就等於任何找到設定頁的人都讀得走,
-    所以由瀏覽器保管、隨請求送出,伺服器用完就忘。"""
+    """標頭帶進來的金鑰只影響這一次請求,不會被存起來 —— 拿另一組額度試一次
+    這種需求仍然要能用。"""
 
     def test_a_token_in_the_header_silences_the_no_token_warning(self, client):
         body = client.post(
@@ -336,3 +336,67 @@ class TestHealth:
         """`last_success_at` 一直前進但 `last_nonempty_at` 卡住,就是壞掉的樣子。"""
         sources = {s["source"]: s for s in client.get("/api/health").json()["sources"]}
         assert sources["travelpayouts-refdata"]["last_nonempty_at"] is not None
+
+
+class TestStoredKeys:
+    """金鑰改存伺服器。原本只存瀏覽器是因為站台公開;站台上鎖之後那個理由消失,
+    而「在網頁上按了儲存卻只有那台瀏覽器算數」對使用者來說跟壞掉沒兩樣。"""
+
+    def test_nothing_stored_initially(self, client):
+        client.delete("/api/keys")
+        body = client.get("/api/keys").json()
+        assert body["configured"] is False
+        assert body["source"] == "none"
+
+    def test_saving_makes_it_stick(self, client):
+        client.put("/api/keys", json={"token": "stored-token-1234", "marker": "559947"})
+        body = client.get("/api/keys").json()
+        assert body["configured"] is True
+        assert body["source"] == "saved"
+        assert body["marker"] == "559947"
+        client.delete("/api/keys")
+
+    def test_the_token_itself_is_never_returned(self, client):
+        client.put("/api/keys", json={"token": "stored-token-1234", "marker": ""})
+        body = client.get("/api/keys").json()
+        assert "stored-token-1234" not in str(body)
+        assert body["masked_token"] == "stor…1234"
+        client.delete("/api/keys")
+
+    def test_a_stored_key_silences_the_no_token_warning(self, client):
+        client.put("/api/keys", json={"token": "stored-token-1234", "marker": ""})
+        body = client.post("/api/search", json=JAPAN_SEARCH).json()
+        assert not any("Travelpayouts token" in w for w in body["warnings"])
+        client.delete("/api/keys")
+
+    def test_a_stored_marker_reaches_the_links(self, client, priced):
+        client.put("/api/keys", json={"token": "stored-token-1234", "marker": "654321"})
+        body = client.post("/api/search", json=JAPAN_SEARCH).json()
+        assert body["results"][0]["links"]["single_ticket"]["aviasales"].endswith(
+            "?marker=654321"
+        )
+        client.delete("/api/keys")
+
+    def test_a_request_header_overrides_the_stored_key(self, client, priced):
+        """一次性覆寫仍然要能用 —— 例如想拿另一組額度試一次。"""
+        client.put("/api/keys", json={"token": "stored-token-1234", "marker": "111111"})
+        body = client.post(
+            "/api/search", json=JAPAN_SEARCH,
+            headers={"X-Travelpayouts-Token": "one-off", "X-Travelpayouts-Marker": "222222"},
+        ).json()
+        assert body["results"][0]["links"]["single_ticket"]["aviasales"].endswith(
+            "?marker=222222"
+        )
+        client.delete("/api/keys")
+
+    def test_clearing_removes_it(self, client):
+        client.put("/api/keys", json={"token": "stored-token-1234", "marker": "1"})
+        client.delete("/api/keys")
+        assert client.get("/api/keys").json()["configured"] is False
+
+    def test_health_reports_where_the_key_came_from(self, client):
+        client.put("/api/keys", json={"token": "stored-token-1234", "marker": ""})
+        config = client.get("/api/health").json()["config"]
+        assert config["cached_prices"] is True
+        assert config["key_source"] == "saved"
+        client.delete("/api/keys")

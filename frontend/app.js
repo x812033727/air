@@ -13,6 +13,7 @@ const state = {
   home: { country: "TW", selected: new Set(["TPE", "TSA"]), label: "台北" },
   stops: [],
   lastSearch: null,
+  keys: null,
   // 沒有即時報價來源時,「查即時價」按鈕只會回一句「未接即時報價來源」——
   // 白費一次點擊,而且旁邊的連結早就在做同一件事。
   hasLivePricing: false,
@@ -22,29 +23,10 @@ const $ = (selector) => document.querySelector(selector);
 
 /* ---------------------------------------------------------------- fetch */
 
-/* 金鑰只存在這台瀏覽器,查價時當成標頭送出。站台是公開的、沒有登入,
- * 存在伺服器上的金鑰等於任何找到設定面板的人都讀得走。 */
-const KEY_STORE = "air.travelpayouts";
-
-function loadKeys() {
-  try {
-    return JSON.parse(localStorage.getItem(KEY_STORE) || "{}");
-  } catch {
-    return {};
-  }
-}
-
-function saveKeys(keys) {
-  localStorage.setItem(KEY_STORE, JSON.stringify(keys));
-}
-
-function authHeaders() {
-  const { token, marker } = loadKeys();
-  const headers = {};
-  if (token) headers["X-Travelpayouts-Token"] = token;
-  if (marker) headers["X-Travelpayouts-Marker"] = marker;
-  return headers;
-}
+/* 金鑰存在伺服器上。以前只存瀏覽器,是因為站台公開、伺服器端的金鑰誰都讀得走;
+ * 站台上鎖之後那個理由消失了,而「在網頁上按了儲存卻只有這台瀏覽器算數」對使用者
+ * 來說跟壞掉沒兩樣 —— 換手機要重填,伺服器端的工具也拿不到。 */
+const LEGACY_KEY_STORE = "air.travelpayouts";
 
 async function api(path, options) {
   const response = await fetch(API + path, options);
@@ -545,7 +527,7 @@ async function runSearch(event) {
     button.textContent = "抓價中…";
     const warmed = await api("/api/search/warm", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     for (const warning of warmed.warnings || []) {
@@ -555,7 +537,7 @@ async function runSearch(event) {
     button.textContent = "排名中…";
     const result = await api("/api/search", {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders() },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     state.lastSearch = result;
@@ -615,8 +597,7 @@ async function loadStatus() {
     strip.replaceChildren();
 
     state.hasLivePricing = health.config.live_provider !== "deeplink";
-    // 金鑰可能來自這台瀏覽器,也可能來自伺服器的 .env —— 兩者都算接上了。
-    const pricing = Boolean(loadKeys().token) || health.config.cached_prices;
+    const pricing = health.config.cached_prices;
     const chip = el(
       "span",
       `chip chip--quiet${pricing ? "" : " chip--alert"}`,
@@ -647,47 +628,82 @@ async function loadStatus() {
   }
 }
 
-/** 只顯示金鑰的頭尾,中間遮掉 —— 讓你確認填的是哪一組,又不必把它整串
- *  攤在螢幕上。 */
-function maskKey(token) {
-  if (!token) return "";
-  return token.length <= 8 ? "••••" : `${token.slice(0, 4)}…${token.slice(-4)}`;
+async function renderKeyState() {
+  const keys = await api("/api/keys");
+  state.keys = keys;
+  const node = $("#key-state");
+
+  if (keys.configured) {
+    const where =
+      { saved: "存在站台", env: "來自伺服器設定檔", request: "本次請求" }[keys.source] ||
+      keys.source;
+    node.className = "keys__state keys__state--ok";
+    node.textContent =
+      `已儲存 token ${keys.masked_token}(${where})` +
+      (keys.marker ? ` · marker ${keys.marker}` : " · 未填 marker");
+  } else {
+    node.className = "keys__state";
+    node.textContent = "尚未填入,目前沒有價格可以排名";
+  }
+  $("#key-token").value = "";
+  $("#key-marker").value = keys.marker || "";
 }
 
-function renderKeyState() {
-  const { token, marker } = loadKeys();
-  const state_ = $("#key-state");
-  if (token) {
-    state_.className = "keys__state keys__state--ok";
-    state_.textContent =
-      `已儲存 token ${maskKey(token)}` + (marker ? ` · marker ${marker}` : " · 未填 marker");
-  } else {
-    state_.className = "keys__state";
-    state_.textContent = "尚未填入,目前沒有價格可以排名";
+/** 把舊版存在這台瀏覽器裡的金鑰搬到伺服器,搬完清掉本機那份。
+ *  使用者當初真的按過儲存,不該因為我改了設計就要他重打一次。 */
+async function migrateLegacyKeys() {
+  let legacy;
+  try {
+    legacy = JSON.parse(localStorage.getItem(LEGACY_KEY_STORE) || "{}");
+  } catch {
+    legacy = {};
   }
-  $("#key-token").value = token || "";
-  $("#key-marker").value = marker || "";
+  if (!legacy.token) return;
+
+  const current = await api("/api/keys");
+  if (!current.configured) {
+    await api("/api/keys", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: legacy.token, marker: legacy.marker || "" }),
+    });
+    showNotice(
+      "金鑰已搬到站台",
+      "原本存在這台瀏覽器的查價金鑰,現在改存在站台上了,換裝置不用再填一次。",
+      "info",
+      "keys-migrated"
+    );
+  }
+  localStorage.removeItem(LEGACY_KEY_STORE);
 }
 
 function wireKeyPanel() {
-  renderKeyState();
-
-  $("#key-save").addEventListener("click", () => {
+  $("#key-save").addEventListener("click", async () => {
     const token = $("#key-token").value.trim();
     const marker = $("#key-marker").value.trim();
-    saveKeys({ token, marker });
-    renderKeyState();
-    loadStatus();
-    if (token) {
-      $("#keys").open = false;
-      showNotice("金鑰已儲存", "再按一次「找組合」就會帶著它去查價。", "info", "keys-saved");
+    if (!token && !marker) return;
+    try {
+      await api("/api/keys", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, marker }),
+      });
+      await renderKeyState();
+      await loadStatus();
+      if (token) {
+        $("#keys").open = false;
+        showNotice("金鑰已儲存", "再按一次「找組合」就會帶著它去查價。", "info", "keys-saved");
+      }
+    } catch (error) {
+      $("#key-state").className = "keys__state keys__state--bad";
+      $("#key-state").textContent = error.message;
     }
   });
 
-  $("#key-clear").addEventListener("click", () => {
-    localStorage.removeItem(KEY_STORE);
-    renderKeyState();
-    loadStatus();
+  $("#key-clear").addEventListener("click", async () => {
+    await api("/api/keys", { method: "DELETE" });
+    await renderKeyState();
+    await loadStatus();
   });
 }
 
@@ -756,6 +772,8 @@ async function init() {
 
   wireKeyPanel();
   wirePasswordPanel();
+  await migrateLegacyKeys();
+  await renderKeyState();
   await renderPlan();
   $("#plan").addEventListener("submit", runSearch);
   $("#add-stop").addEventListener("click", () => {
