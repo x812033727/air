@@ -1030,9 +1030,13 @@ async function runReverse(event) {
       showNotice("注意", warning, "alert", topicOf(warning));
     }
 
+    // 只顯示「單程＋反向」。其餘三種後端照樣算、測試照樣守著,
+    // 想拿回來比較時只要改這一行。
+    const plans = body.groups[0].plans.filter((plan) => plan.method === "hybrid");
+
     const list = $("#rev-list");
     list.replaceChildren();
-    for (const plan of body.groups[0].plans) list.append(methodCard(plan, body.currency));
+    for (const plan of plans) list.append(methodCard(plan, body.currency));
 
     $("#rev-summary").textContent =
       `${body.route_pairs} 條航線 · ${body.months.join("、")} · ` +
