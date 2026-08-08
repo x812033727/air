@@ -13,7 +13,8 @@
 既然省錢的來源就是來回計價,用手上的單程價加總算出來的數字,保證看不到那個效果 ——
 顯示它會比不顯示更糟。所以這裡產出的是**組票與連結**,價格交給訂票網站。
 
-唯一有數字的是「四段全拆單程」那種買法,因為那個我們真的有資料。
+數字只掛在**單程票**上(四段全拆的四張、單程＋反向的兩張),因為單程價我們真的有。
+倒買票永遠不猜價 —— 它省錢的機制就是來回計價,拿單程價拼它必然算錯。
 """
 
 from __future__ import annotations
@@ -62,6 +63,9 @@ class Ticket:
     label: str
     role: str
     legs: tuple[FlightLeg, ...]
+    # 這張票能不能誠實標價。只有單程票是 True:單程快取價就是單程票的真價;
+    # 按來回計價開的票(來回、開口)用單程價拼必然算錯,所以永遠是 False。
+    priceable: bool = False
 
     @property
     def combo(self) -> Combo:
@@ -113,6 +117,12 @@ class Plan:
 NO_ROUND_TRIP_DATA = (
     "台灣出發的航線沒有來回票的快取資料,而倒買法省的就是來回計價,"
     "所以這裡不猜價格。請用右邊的連結各自查真價再比。"
+)
+
+HYBRID_NO_TOTAL = (
+    "兩張單程有快取價(標在各張票上),但倒買票是按來回計價開的票,"
+    "台灣出發的航線沒有來回快取資料。缺一張就不算總價 —— "
+    "把有價的兩張加一加當總價,比不顯示更會誤導。"
 )
 
 
@@ -167,18 +177,41 @@ def build_plans(home: Sequence[str], first: Trip, second: Trip) -> list[Plan]:
         unavailable_reason=NO_ROUND_TRIP_DATA,
     )
 
-    # 四張單程。這是唯一我們有資料可以算的買法。
+    # 混搭:只留倒買票(外站出發那張 —— 省錢的機制就在外站計價,商務艙也常便宜),
+    # 包覆票的兩段拆成兩張單程交給廉航。鏡像變體(留包覆票、拆倒買票)刻意不做:
+    # 包覆票只是兩段台灣出發的航段黏在一起,沒有外站計價可佔便宜。
+    hybrid = Plan(
+        method="hybrid",
+        method_label="單程＋反向:兩張單程＋一張倒買票",
+        tickets=(
+            Ticket(
+                f"{a_out.origin}→{a_out.destination}", "單程", (a_out,), priceable=True
+            ),
+            Ticket(
+                f"{first.label}→台北 ＋ 台北→{second.label}",
+                "倒買票",
+                (a_back, b_out),
+            ),
+            Ticket(
+                f"{b_back.origin}→{b_back.destination}", "單程", (b_back,), priceable=True
+            ),
+        ),
+        priceable=False,
+        unavailable_reason=HYBRID_NO_TOTAL,
+    )
+
+    # 四張單程。這是唯一整個買法都有資料可以算的。
     split = Plan(
         method="split",
         method_label="四段全拆:四張單程票",
         tickets=tuple(
-            Ticket(f"{leg.origin}→{leg.destination}", "單程", (leg,))
+            Ticket(f"{leg.origin}→{leg.destination}", "單程", (leg,), priceable=True)
             for leg in (a_out, a_back, b_out, b_back)
         ),
         priceable=True,
     )
 
-    return [normal, reverse, split]
+    return [normal, reverse, hybrid, split]
 
 
 def enumerate_plans(
@@ -261,6 +294,11 @@ def risks(plan: Plan) -> list[str]:
             "同一張票必須依序使用:第一趟的航段沒搭或取消,同一張票上第二趟的航段會自動失效"
         )
         notes.append("兩趟旅行綁在一起,改期或退票要同時處理兩趟")
+    if plan.method == "hybrid":
+        notes.append(
+            "倒買票一張就綁住兩趟:第一趟的回程沒搭或取消,同一張票上第二趟的去程會自動失效"
+        )
+        notes.append("兩張單程各自獨立訂票,跟倒買票之間行李不直掛,誤點沒有人負責銜接")
     if plan.method == "split":
         notes.append("四段各自獨立訂票,行李不直掛,任一段誤點都沒有人負責下一段")
     if plan.method == "normal":

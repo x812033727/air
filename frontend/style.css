@@ -805,6 +805,14 @@ a.chip { text-decoration: none; }
 
 .ticket__role b { display: block; color: var(--airway); font-weight: 600; }
 
+.ticket__price {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
 .ticket__body { min-width: 0; display: grid; gap: 0.5rem; }
 
 .ticket__links { display: flex; flex-wrap: wrap; gap: 0.4rem; }

@@ -794,7 +794,8 @@ init().catch((error) => showNotice("啟動失敗", error.message, "alert"));
  *
  * 這個模式**不比價**,而那不是還沒做完 —— 台灣出發的航線沒有來回票的快取資料,
  * 而倒買法省的就是來回計價。用單程加總去猜,算出來的數字保證看不到那個效果。
- * 所以這裡產出的是組票與連結,價格交給訂票網站。唯一有數字的是四段拆單程。
+ * 所以這裡產出的是組票與連結,價格交給訂票網站。有數字的只有單程票
+ * (四段全拆的四張、單程＋反向的兩張);倒買票永遠不猜價。
  * ========================================================================== */
 
 const reverseState = {
@@ -847,12 +848,16 @@ async function renderReversePlan() {
 }
 
 /** 一張票畫成一條航線。兩張票上下並排,交叉的地方就看得見了。 */
-function ticketRow(ticket) {
+function ticketRow(ticket, currency) {
   const row = el("div", "ticket");
 
   const role = el("div", "ticket__role");
   role.append(el("b", null, ticket.role));
   if (ticket.open_jaw) role.append(document.createTextNode("開口"));
+  if (ticket.pricing) {
+    role.append(el("div", "ticket__price",
+      ticket.pricing.total != null ? money(ticket.pricing.total, currency) : "查無資料"));
+  }
   row.append(role);
 
   const body = el("div", "ticket__body");
@@ -917,14 +922,14 @@ function methodCard(plan, currency) {
   } else if (plan.pricing) {
     head.append(
       el("div", "method__noprice",
-         `四段裡有 ${plan.pricing.missing.join("、")} 查無資料,所以不算總價`)
+         `有 ${plan.pricing.missing.join("、")} 查無資料,所以不算總價`)
     );
   } else {
     head.append(el("div", "method__noprice", plan.unavailable_reason));
   }
   card.append(head);
 
-  for (const ticket of plan.tickets) card.append(ticketRow(ticket));
+  for (const ticket of plan.tickets) card.append(ticketRow(ticket, currency));
 
   if (plan.risks?.length) {
     const risks = el("ul", "card__risks");
@@ -979,7 +984,7 @@ async function runReverse(event) {
 
     $("#rev-summary").textContent =
       `${body.route_pairs} 條航線 · ${body.months.join("、")} · ` +
-      `這裡只組票不比價,票價請用每張票的連結各自查再比。`;
+      `這裡只給單程段的快取價,總價請用每張票的連結各自查再比。`;
     $("#reverse-results").hidden = false;
     $("#reverse-results").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
