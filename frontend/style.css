@@ -1103,3 +1103,69 @@ a.chip { text-decoration: none; }
 .total__warn b { display: block; margin-bottom: 0.2rem; }
 .total__warn > div { margin-bottom: 0.2rem; }
 .total__why { color: var(--ink-faint); }
+
+/* ---- 把查到的真價填回來 ------------------------------------------------- */
+
+.quote {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--rule);
+}
+
+.quote__label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+}
+
+.quote__input { width: 8rem; min-width: 0; }
+
+/* ---- 比一比 -------------------------------------------------------------- */
+
+.compare {
+  margin-top: 1rem;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper-sunk);
+  display: grid;
+  gap: 0.4rem;
+}
+
+.compare__title {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  color: var(--ink-soft);
+}
+
+.compare__hint { font-size: 0.78rem; line-height: 1.65; color: var(--ink-faint); }
+
+.compare__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+  padding: 0.2rem 0;
+}
+
+.compare__price { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+.compare__row--best { color: var(--airway); font-weight: 600; }
+
+.compare__verdict {
+  margin-top: 0.4rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--airway);
+}
+
+.compare__verdict--worse { color: var(--boundary); }

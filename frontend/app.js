@@ -16,6 +16,9 @@ const state = {
   airlineNames: new Map(),
   // 每個訂票網站的實測狀態(語言、會不會照航空公司篩)。後端給的,前端不猜。
   linkInfo: {},
+  // 目前畫在畫面上的那一組,給「比一比」重畫時用。
+  lastGroup: null,
+  lastCurrency: "TWD",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -675,6 +678,8 @@ function ticketRow(ticket, currency) {
   }
 
   body.append(linkChips(ticket.links));
+  // 只有整張票才要填 —— 單程票站台自己算得出來。
+  if (!ticket.priceable && ticket.legs.length > 1) body.append(quoteRow(ticket));
 
   row.append(body);
   return row;
@@ -845,6 +850,113 @@ function totalCard(group, currency) {
   return card;
 }
 
+/* ---- 把查到的真價填回來 ------------------------------------------------
+ *
+ * 這個站算得出「四段全拆單程」的總價,但算不出那兩張反向票 —— 上游一天只存
+ * 一筆最便宜的票價,不分航空公司,所以星宇之類的傳統航空永遠不會出現
+ * (實測:TPE→NRT 快取裡有 13 家,沒有一家是 JX)。
+ *
+ * 但使用者點連結過去兩下就查得到。站台真正做得到、而手算很煩的是**比較**,
+ * 所以把數字接回來由站台算。存進 localStorage:使用者會離開頁面去查,
+ * 回來時如果要重按一次「組票」才看得到自己剛填的東西,這個流程就沒人會用。 */
+
+const QUOTE_STORE = "air.quotes";
+
+function ticketSignature(ticket) {
+  return ticket.legs.map((l) => `${l.origin}${l.destination}${l.date}`).join("|");
+}
+
+function loadQuotes() {
+  try { return JSON.parse(localStorage.getItem(QUOTE_STORE) || "{}"); }
+  catch { return {}; }
+}
+
+function saveQuote(sig, value) {
+  const all = loadQuotes();
+  if (value == null) delete all[sig];
+  else all[sig] = value;
+  localStorage.setItem(QUOTE_STORE, JSON.stringify(all));
+}
+
+function quoteRow(ticket) {
+  const sig = ticketSignature(ticket);
+  const row = el("div", "quote");
+  row.append(el("span", "quote__label", "查到多少?填回來"));
+  const input = el("input", "quote__input");
+  input.type = "number";
+  input.min = "0";
+  input.step = "1";
+  input.placeholder = "例如 12800";
+  const saved = loadQuotes()[sig];
+  if (saved != null) input.value = saved;
+  input.addEventListener("input", () => {
+    const value = input.value.trim() === "" ? null : Number(input.value);
+    saveQuote(sig, Number.isFinite(value) ? value : null);
+    redrawCompare();
+  });
+  row.append(input);
+  return row;
+}
+
+/** 比一比:兩張反向票 vs 四段全拆單程。
+ *
+ *  這是這個站唯一能做、而使用者手上做不到的事 —— 他有兩個數字,但要跟
+ *  「同樣四段各自買單程」比,得先知道那個總價是多少,而那正是站台算出來的。 */
+function compareCard(group, currency) {
+  const card = el("div", "compare");
+  card.id = "compare";
+
+  const tickets = group.plans.find((p) => p.method === "reverse")?.tickets || [];
+  const quotes = loadQuotes();
+  const entered = tickets.map((t) => quotes[ticketSignature(t)]);
+  const missing = entered.filter((v) => v == null).length;
+  const split = group.split_total;
+
+  card.append(el("div", "compare__title", "比一比"));
+
+  if (missing) {
+    card.append(el("div", "compare__hint",
+      `把兩張票的實際票價填進上面的欄位(還缺 ${missing} 張),` +
+      `站台就會告訴你這樣買到底有沒有比較便宜。`));
+    return card;
+  }
+
+  const reverseTotal = entered.reduce((a, b) => a + b, 0);
+  const rows = [["反向機票(你查到的兩張)", reverseTotal]];
+  if (split != null) rows.push(["同樣四段,各自買單程", split]);
+
+  const best = Math.min(...rows.map(([, v]) => v));
+  for (const [label, value] of rows) {
+    const row = el("div", `compare__row${value === best ? " compare__row--best" : ""}`);
+    row.append(el("span", null, label));
+    row.append(el("span", "compare__price", money(value, currency)));
+    card.append(row);
+  }
+
+  if (split != null) {
+    const delta = split - reverseTotal;
+    card.append(
+      el("div", delta > 0 ? "compare__verdict" : "compare__verdict compare__verdict--worse",
+         delta > 0
+           ? `反向機票便宜 ${money(delta, currency)} —— 值得這樣買。`
+           : delta < 0
+             ? `反向機票貴 ${money(-delta, currency)} —— 這組行程直接買四張單程就好。`
+             : "兩種一樣價 —— 那就挑規則寬鬆的那種,四張單程改期比較自由。")
+    );
+    if (delta > 0) {
+      card.append(el("div", "compare__hint",
+        "省下來的是用「兩趟都一定會去」換的:同一張票必須依序使用,第一趟沒搭,第二趟就失效。"));
+    }
+  }
+  return card;
+}
+
+function redrawCompare() {
+  const old = document.querySelector("#compare");
+  if (!old || !state.lastGroup) return;
+  old.replaceWith(compareCard(state.lastGroup, state.lastCurrency));
+}
+
 /** 讓使用者自己挑日期組合。
  *
  *  後端本來就排了 12 種(機場 × 日期)的組合、照總價排序,但畫面只顯示第一種 ——
@@ -968,9 +1080,12 @@ async function runReverse(event) {
       const group = body.groups[index];
       const chosen = group.plans.filter((plan) => plan.method === "reverse");
       list.replaceChildren();
+      state.lastGroup = group;
+      state.lastCurrency = body.currency;
       list.append(totalCard(group, body.currency));
       list.append(datePicker(body, index, draw));
       for (const plan of chosen) list.append(methodCard(plan, body.currency));
+      list.append(compareCard(group, body.currency));
 
       const seq = group.plans[0]?.sequence || [];
       $("#rev-summary").textContent = seq.length
