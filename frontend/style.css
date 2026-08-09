@@ -1013,3 +1013,9 @@ a.chip { text-decoration: none; }
 }
 
 .explain__diagram b { color: var(--airway); }
+
+/* 兩個下拉並排時要能縮。grid/flex 子元素預設 min-width:auto,select 又會被
+   最寬的選項撐開(「Bosnia and Herzegovina (12)」),於是整頁橫向溢出。 */
+.stop__row .field { flex: 1 1 11rem; min-width: 0; max-width: 100%; }
+.stop__row .field select { width: 100%; min-width: 0; }
+.stop__row .field--narrow { flex: 0 0 auto; }

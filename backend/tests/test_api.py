@@ -700,3 +700,24 @@ class TestTheDatesCanFlex:
                 assert group["split_total"] == pytest.approx(
                     sum(leg["price"] for leg in legs)
                 )
+
+
+class TestCountryThenCity:
+    """先選國家、再選城市 —— 但兩個原本的 bug 要一起修掉,否則又是同一條死路。"""
+
+    def test_every_city_of_a_country_comes_back(self, client):
+        """伺服器本來就回全部,截斷發生在前端的 `slice(0, 12)`。這條測試釘住
+        後端這一側:日本 72 個可飛城市不能因為排序或分頁少掉任何一個。"""
+        body = client.get("/api/ref/countries/JP/airports").json()
+        assert len(body["cities"]) == 2  # 固定資料只有東京、大阪
+        codes = {a["code"] for c in body["cities"] for a in c["airports"]}
+        assert codes == {"NRT", "HND", "KIX", "ITM"}
+
+    def test_countries_with_a_chinese_name_come_before_the_english_ones(self, client):
+        """只照 name_zh 排會出事:沒收錄中文名的國家,name_zh 存的是英文字串,
+        於是 147 個英文國名會夾在中文國名中間,把挪威、瑞典擠到它們之後。"""
+        countries = client.get("/api/ref/countries").json()["countries"]
+        translated = [i for i, c in enumerate(countries) if c["translated"]]
+        english = [i for i, c in enumerate(countries) if not c["translated"]]
+        if english and translated:
+            assert max(translated) < min(english)

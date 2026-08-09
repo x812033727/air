@@ -56,26 +56,21 @@ function el(tag, className, text) {
   return node;
 }
 
-/** 地點選擇:點一下有得選,打字會過濾。
+/** 地點選擇:先選國家,再選城市/機場。
  *
- *  兩種都要。原本的挑法(選國家 → 從前 12 個城市裡點)是**死路**:日本 72 個
- *  可飛城市只列得出 12 個,岡山、函館、石垣點不到,而上面的下拉寫著「日本 (77)」。
- *  但只給一個搜尋框也一樣是死路 —— 換成不知道要打什麼的人卡在空白輸入框前面。
- *  所以:聚焦就展開熱門清單,打字就變成搜尋,打國家名(日本)也算。 */
+ *  原本這個流程有兩個 bug,不是流程本身的錯:
+ *  1. **城市被截斷在 12 個**(`cities.slice(0, 12)`)。日本 72 個可飛城市只列得出
+ *     12 個,岡山、函館、石垣點不到,而上面的下拉寫著「日本 (77)」—— 看起來只是
+ *     排在後面,實際上沒有那個按鈕。現在改成下拉,**全部列出來**,不截斷。
+ *  2. **國家下拉的排序**把 147 個英文國名夾在中文國名中間,挪威排在
+ *     Abkhazia…Åland Islands 之後。後端已改成「常用 → 有中文名 → 只有英文名」。
+ *
+ *  下拉之外再留一個打字的入口:知道代碼的人打 KIX 比翻兩層快,而且打「日本」
+ *  也算。兩條路並存,誰都不會卡住。 */
 async function renderPlace(container, place, onChange) {
   container.replaceChildren();
 
   const picked = el("div", "picked");
-  const box = el("div", "combo");
-  const search = el("input", "combo__input");
-  search.type = "search";
-  search.placeholder = "點一下選,或打字找:東京 / 福岡 / KIX / 日本";
-  search.autocomplete = "off";
-  search.setAttribute("role", "combobox");
-  search.setAttribute("aria-expanded", "false");
-  const list = el("div", "combo__list");
-  list.hidden = true;
-
   const paintPicked = () => {
     picked.replaceChildren();
     if (!place.selected.size) {
@@ -96,64 +91,109 @@ async function renderPlace(container, place, onChange) {
     }
   };
 
-  const close = () => {
-    list.hidden = true;
-    search.setAttribute("aria-expanded", "false");
-  };
-
-  const addCity = (city) => {
-    // 選城市 = 把它的機場全部納入。多機場的城市正是省錢的來源,所以預設全收;
-    // 不想要的再按 × 拿掉。
-    for (const airport of city.airports) place.selected.add(airport.code);
-    place.label = city.name;
+  const add = (codes, label) => {
+    for (const code of codes) place.selected.add(code);
+    if (label) place.label = label;
     paintPicked();
-    search.value = "";
-    close();
     onChange();
   };
 
-  const show = async (q) => {
-    let body;
-    try {
-      body = await api(`/api/ref/places?limit=12&q=${encodeURIComponent(q)}`);
-    } catch {
-      return;
+  const row = el("div", "stop__row");
+
+  // ---- 國家 ----
+  const countryField = el("label", "field");
+  countryField.append(el("span", "field__label", "國家"));
+  const country = el("select");
+  for (const item of state.countries) {
+    const option = el("option", null, `${item.name_zh} (${item.airport_count})`);
+    option.value = item.code;
+    if (item.code === place.country) option.selected = true;
+    country.append(option);
+  }
+  countryField.append(country);
+
+  // ---- 城市/機場 ----
+  const cityField = el("label", "field");
+  cityField.append(el("span", "field__label", "城市 / 機場"));
+  const city = el("select");
+  cityField.append(city);
+
+  const fillCities = async () => {
+    city.replaceChildren();
+    const placeholder = el("option", null, "選一個…");
+    placeholder.value = "";
+    city.append(placeholder);
+    // **不截斷。** 這正是原本的死路:第 13 名之後的城市根本沒有按鈕,
+    // 而畫面上完全沒有一句話說明。
+    for (const item of await airportsFor(place.country)) {
+      const codes = item.airports.map((a) => a.code);
+      const option = el("option", null,
+        codes.length > 1 ? `${item.name}(${codes.join(" ")})` : `${item.name} ${codes[0]}`);
+      option.value = item.code;
+      city.append(option);
     }
-    list.replaceChildren();
-    if (!body.places.length) {
-      list.append(el("div", "picked__empty", `找不到「${q}」`));
-    }
-    for (const city of body.places) {
-      const hit = el("button", "combo__hit");
-      hit.type = "button";
-      hit.append(el("b", null, city.name));
-      hit.append(el("span", "combo__codes", city.airports.map((a) => a.code).join(" ")));
-      hit.append(el("span", "combo__country", city.country));
-      // mousedown 而不是 click:blur 會先關掉清單,click 就永遠不會發生。
-      hit.addEventListener("mousedown", (event) => {
-        event.preventDefault();
-        addCity(city);
-      });
-      list.append(hit);
-    }
-    list.hidden = false;
-    search.setAttribute("aria-expanded", "true");
   };
 
-  let timer = null;
-  search.addEventListener("focus", () => show(search.value.trim()));
-  search.addEventListener("input", () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => show(search.value.trim()), 200);
-  });
-  search.addEventListener("blur", () => setTimeout(close, 120));
-  search.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") close();
+  city.addEventListener("change", async () => {
+    const chosen = (await airportsFor(place.country)).find((c) => c.code === city.value);
+    if (!chosen) return;
+    add(chosen.airports.map((a) => a.code), chosen.name);
+    city.value = "";
   });
 
+  country.addEventListener("change", async () => {
+    place.country = country.value;
+    await fillCities();
+  });
+
+  row.append(countryField, cityField);
+
+  // ---- 或直接打字 ----
+  const typed = el("div", "combo");
+  const search = el("input", "combo__input");
+  search.type = "search";
+  search.placeholder = "或直接打:福岡 / KIX / 日本";
+  search.autocomplete = "off";
+  const list = el("div", "combo__list");
+  list.hidden = true;
+  const close = () => { list.hidden = true; };
+
+  let timer = null;
+  search.addEventListener("input", () => {
+    clearTimeout(timer);
+    const q = search.value.trim();
+    if (!q) { close(); return; }
+    timer = setTimeout(async () => {
+      let body;
+      try { body = await api(`/api/ref/places?limit=10&q=${encodeURIComponent(q)}`); }
+      catch { return; }
+      list.replaceChildren();
+      if (!body.places.length) list.append(el("div", "picked__empty", `找不到「${q}」`));
+      for (const item of body.places) {
+        const hit = el("button", "combo__hit");
+        hit.type = "button";
+        hit.append(el("b", null, item.name));
+        hit.append(el("span", "combo__codes", item.airports.map((a) => a.code).join(" ")));
+        hit.append(el("span", "combo__country", item.country));
+        // mousedown 而不是 click:blur 會先關掉清單,click 就永遠不會發生。
+        hit.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          add(item.airports.map((a) => a.code), item.name);
+          search.value = "";
+          close();
+        });
+        list.append(hit);
+      }
+      list.hidden = false;
+    }, 200);
+  });
+  search.addEventListener("blur", () => setTimeout(close, 120));
+  search.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+  typed.append(search, list);
+
   paintPicked();
-  box.append(search, list);
-  container.append(picked, box);
+  container.append(picked, row, typed);
+  await fillCities();
 }
 
 /* --------------------------------------------------------------- results */
@@ -484,10 +524,10 @@ async function wireAirlinePanel() {
  * ========================================================================== */
 
 const reverseState = {
-  home: { selected: new Set(["TPE", "TSA"]), label: "台北" },
+  home: { country: "TW", selected: new Set(["TPE", "TSA"]), label: "台北" },
   trips: [
-    { selected: new Set(), label: "", depart: "", nights: 5, flex: true },
-    { selected: new Set(), label: "", depart: "", nights: 5, flex: true },
+    { country: "JP", selected: new Set(), label: "", depart: "", nights: 5, flex: true },
+    { country: "JP", selected: new Set(), label: "", depart: "", nights: 5, flex: true },
   ],
 };
 

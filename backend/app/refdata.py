@@ -259,7 +259,14 @@ def list_countries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     countries = [dict(row) for row in rows]
     for country in countries:
         country["popularity"] = zh_names.popularity(country["code"])
-    countries.sort(key=lambda c: (c["popularity"], c["name_zh"]))
+        country["translated"] = country["code"].upper() in zh_names.COUNTRY_ZH
+    # 常用的排最前面,再來是**有中文名的**,最後才是只有英文名的。
+    # 只照 name_zh 排會出事:沒收錄中文名的國家,name_zh 存的是英文字串,
+    # 於是 147 個英文國名(Abkhazia…Åland Islands)會夾在中文國名中間,
+    # 把挪威、瑞典、巴西、墨西哥擠到那 147 個之後 —— 實測就是這樣。
+    countries.sort(
+        key=lambda c: (c["popularity"], not c["translated"], c["name_zh"])
+    )
     return countries
 
 
