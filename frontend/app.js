@@ -56,20 +56,25 @@ function el(tag, className, text) {
   return node;
 }
 
-/** 打字找地方。取代原本「選國家 → 從前 12 個城市裡點」的挑法。
+/** 地點選擇:點一下有得選,打字會過濾。
  *
- *  那個挑法是**死路**,不是不方便:日本 72 個可飛城市只列得出 12 個(`slice(0,12)`),
- *  岡山、函館、石垣點不到,而上面的下拉寫著「日本 (77)」—— 看起來只是排在後面,
- *  實際上沒有那個按鈕。要去的地方一旦不在前 12 名,這個工具對他就完全不能用。 */
+ *  兩種都要。原本的挑法(選國家 → 從前 12 個城市裡點)是**死路**:日本 72 個
+ *  可飛城市只列得出 12 個,岡山、函館、石垣點不到,而上面的下拉寫著「日本 (77)」。
+ *  但只給一個搜尋框也一樣是死路 —— 換成不知道要打什麼的人卡在空白輸入框前面。
+ *  所以:聚焦就展開熱門清單,打字就變成搜尋,打國家名(日本)也算。 */
 async function renderPlace(container, place, onChange) {
   container.replaceChildren();
 
   const picked = el("div", "picked");
-  const search = el("input", "place__search");
+  const box = el("div", "combo");
+  const search = el("input", "combo__input");
   search.type = "search";
-  search.placeholder = "打城市或代碼,例如 東京 / 福岡 / KIX";
+  search.placeholder = "點一下選,或打字找:東京 / 福岡 / KIX / 日本";
   search.autocomplete = "off";
-  const found = el("div", "place__found");
+  search.setAttribute("role", "combobox");
+  search.setAttribute("aria-expanded", "false");
+  const list = el("div", "combo__list");
+  list.hidden = true;
 
   const paintPicked = () => {
     picked.replaceChildren();
@@ -91,49 +96,64 @@ async function renderPlace(container, place, onChange) {
     }
   };
 
+  const close = () => {
+    list.hidden = true;
+    search.setAttribute("aria-expanded", "false");
+  };
+
   const addCity = (city) => {
     // 選城市 = 把它的機場全部納入。多機場的城市正是省錢的來源,所以預設全收;
     // 不想要的再按 × 拿掉。
     for (const airport of city.airports) place.selected.add(airport.code);
     place.label = city.name;
     paintPicked();
+    search.value = "";
+    close();
     onChange();
   };
 
+  const show = async (q) => {
+    let body;
+    try {
+      body = await api(`/api/ref/places?limit=12&q=${encodeURIComponent(q)}`);
+    } catch {
+      return;
+    }
+    list.replaceChildren();
+    if (!body.places.length) {
+      list.append(el("div", "picked__empty", `找不到「${q}」`));
+    }
+    for (const city of body.places) {
+      const hit = el("button", "combo__hit");
+      hit.type = "button";
+      hit.append(el("b", null, city.name));
+      hit.append(el("span", "combo__codes", city.airports.map((a) => a.code).join(" ")));
+      hit.append(el("span", "combo__country", city.country));
+      // mousedown 而不是 click:blur 會先關掉清單,click 就永遠不會發生。
+      hit.addEventListener("mousedown", (event) => {
+        event.preventDefault();
+        addCity(city);
+      });
+      list.append(hit);
+    }
+    list.hidden = false;
+    search.setAttribute("aria-expanded", "true");
+  };
+
   let timer = null;
+  search.addEventListener("focus", () => show(search.value.trim()));
   search.addEventListener("input", () => {
-    const q = search.value.trim();
     clearTimeout(timer);
-    if (!q) { found.replaceChildren(); return; }
-    timer = setTimeout(async () => {
-      let body;
-      try {
-        body = await api(`/api/ref/places?q=${encodeURIComponent(q)}&limit=8`);
-      } catch { return; }
-      found.replaceChildren();
-      if (!body.places.length) {
-        found.append(el("span", "picked__empty", `找不到「${q}」`));
-        return;
-      }
-      for (const city of body.places) {
-        const button = el("button", "place__hit");
-        button.type = "button";
-        button.append(el("b", null, city.name));
-        button.append(el("span", "place__codes",
-          city.airports.map((a) => a.code).join(" ")));
-        button.append(el("span", "place__country", city.country));
-        button.addEventListener("click", () => {
-          addCity(city);
-          search.value = "";
-          found.replaceChildren();
-        });
-        found.append(button);
-      }
-    }, 200);
+    timer = setTimeout(() => show(search.value.trim()), 200);
+  });
+  search.addEventListener("blur", () => setTimeout(close, 120));
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") close();
   });
 
   paintPicked();
-  container.append(picked, search, found);
+  box.append(search, list);
+  container.append(picked, box);
 }
 
 /* --------------------------------------------------------------- results */

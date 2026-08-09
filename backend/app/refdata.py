@@ -360,49 +360,63 @@ def expand_airports(conn: sqlite3.Connection, codes: Iterable[str]) -> list[Airp
 def search_cities(
     conn: sqlite3.Connection, query: str, *, limit: int = 20
 ) -> list[City]:
-    """打字找地方,回傳城市(連它的機場)。
+    """找地方,回傳城市(連它的機場)。`query` 留空就給熱門清單。
 
     這支的存在理由是**選單原本是死路**:舊版的挑法是「選國家 → 從前 12 個城市裡點」,
     而日本有 72 個可飛城市 —— 岡山、函館、石垣、靜岡全部點不到,而且畫面上寫著
     「日本 (77)」,看起來只是排在後面,實際上根本沒有那個按鈕。美國更誇張,
     525 個城市裡只列得出 12 個。
 
-    比對四種寫法,因為使用者手上有哪一種完全看心情:中文名(福岡)、英文名
-    (Fukuoka)、城市代碼(FUK)、機場代碼(HND)。參考資料只有 253 國裡的 90 國、
+    比對五種寫法,因為使用者手上有哪一種完全看心情:中文名(福岡)、英文名
+    (Fukuoka)、城市代碼(FUK)、機場代碼(HND)、國家(日本)。參考資料只有 253 國裡的 90 國、
     3,522 個可飛城市裡的 138 個有中文名,所以**英文與代碼一定要能搜** ——
     不然沒有中文名的地方一樣是死路,只是死得比較隱晦。
     """
     q = query.strip()
-    if not q:
-        return []
     like = f"%{q}%"
     upper = q.upper()
 
-    rows = conn.execute(
-        """
+    select = """
         SELECT a.code       AS airport_code,
                a.name_zh    AS airport_name,
                a.city_code  AS city_code,
                a.country_code,
-               COALESCE(ct.name_zh, a.name_zh) AS city_name,
-               COALESCE(ct.name_en, '')        AS city_name_en,
-               COALESCE(co.name_zh, co.name_en, '') AS country_name
+               COALESCE(ct.name_zh, a.name_zh) AS city_name
         FROM airports a
         LEFT JOIN cities ct    ON ct.code = a.city_code
         LEFT JOIN countries co ON co.code = a.country_code
         WHERE a.flightable = 1 AND a.iata_type = 'airport'
-          AND (
-                a.code = ?
-             OR a.city_code = ?
-             OR a.name_zh LIKE ?
-             OR a.name_en LIKE ?
-             OR COALESCE(ct.name_zh, '') LIKE ?
-             OR COALESCE(ct.name_en, '') LIKE ?
-          )
-        ORDER BY city_name, a.code
-        """,
-        (upper, upper, like, like, like, like),
-    ).fetchall()
+    """
+
+    if q:
+        rows = conn.execute(
+            select + """
+              AND (
+                    a.code = ?
+                 OR a.city_code = ?
+                 OR a.name_zh LIKE ?
+                 OR a.name_en LIKE ?
+                 OR COALESCE(ct.name_zh, '') LIKE ?
+                 OR COALESCE(ct.name_en, '') LIKE ?
+                 -- 打國家名也要能用。「日本」比「福岡」更容易是使用者腦中的第一個詞,
+                 -- 尤其是還沒決定去哪一城的時候。
+                 OR co.code = ?
+                 OR COALESCE(co.name_zh, '') LIKE ?
+                 OR COALESCE(co.name_en, '') LIKE ?
+              )
+            ORDER BY city_name, a.code
+            """,
+            (upper, upper, like, like, like, like, upper, like, like),
+        ).fetchall()
+    else:
+        # 還沒打字:給一份**點得到的**清單。純搜尋框對「不知道要打什麼」的人
+        # 一樣是死路 —— 只是死在一個空白輸入框前面,而不是死在一份截斷的清單裡。
+        # 用 CITY_ZH 的排列順序當熱門度,那份表本來就是照台灣旅客會想到的順序寫的。
+        placeholders = ",".join("?" * len(zh_names.CITY_ZH))
+        rows = conn.execute(
+            select + f" AND a.city_code IN ({placeholders}) ORDER BY city_name, a.code",
+            tuple(zh_names.CITY_ZH),
+        ).fetchall()
 
     grouped: dict[str, list[sqlite3.Row]] = {}
     for row in rows:

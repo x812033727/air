@@ -592,3 +592,111 @@ class TestTheReverseCardIsNotJustBlank:
                 "not_fetched", "route_empty", "nearby", "far_only"
             }
             assert leg["gap"]["text"]
+
+
+class TestPickingAPlace:
+    """點一下要有得選,打字要能過濾。**兩個都要。**
+
+    舊的挑法(選國家 → 從前 12 個城市裡點)是死路:`slice(0, 12)` 讓日本 72 個
+    可飛城市只列得出 12 個,岡山、函館、石垣點不到,而畫面上寫著「日本 (77)」。
+    但只給一個搜尋框也一樣是死路 —— 換成不知道要打什麼的人卡在空白輸入框前面。
+    """
+
+    def test_an_empty_query_still_offers_somewhere_to_start(self, client):
+        places = client.get("/api/ref/places").json()["places"]
+        assert places, "沒打字也要有得選,否則搜尋框對還沒想好的人就是空白一片"
+        assert places[0]["code"] == "TPE"  # 台灣旅客的起點排最前面
+
+    @pytest.mark.parametrize("query", ["東京", "Tokyo", "TYO", "NRT"])
+    def test_a_city_is_findable_by_any_of_its_names(self, client, query):
+        """3,522 個可飛城市裡只有 138 個有中文名,所以英文與代碼一定要能搜 ——
+        不然沒有中文名的地方一樣是死路,只是死得比較隱晦。"""
+        places = client.get(f"/api/ref/places?q={query}").json()["places"]
+        assert any(p["code"] == "TYO" for p in places)
+
+    def test_typing_a_country_lists_its_cities(self, client):
+        """「日本」比「福岡」更容易是腦中的第一個詞,尤其還沒決定去哪一城的時候。"""
+        places = client.get("/api/ref/places?q=日本").json()["places"]
+        assert {p["code"] for p in places} >= {"TYO", "OSA"}
+
+    def test_a_city_comes_with_every_one_of_its_airports(self, client):
+        """選城市 = 把機場全部納入。多機場的城市正是機場替代能省錢的來源。"""
+        (tokyo,) = [
+            p for p in client.get("/api/ref/places?q=TYO").json()["places"]
+            if p["code"] == "TYO"
+        ]
+        assert {a["code"] for a in tokyo["airports"]} == {"NRT", "HND"}
+
+    def test_bus_stations_never_reach_the_picker(self, client):
+        """Travelpayouts 把 LMJ(東京巴士總站)標成 flightable。"""
+        places = client.get("/api/ref/places?q=東京").json()["places"]
+        assert "LMJ" not in {a["code"] for p in places for a in p["airports"]}
+
+
+class TestTheDatesCanFlex:
+    """固定四個確切日期是這個功能一直沒有價格的原因之一 —— 哪幾天有快取資料
+    使用者無從得知。實測同一組行程只把第二趟從 10/20 挪到 10/06,
+    算得出總價的機場組合就從 0 種變成 36 種。"""
+
+    def _body(self, **first):
+        return {
+            "home": ["TPE"],
+            "first": {"codes": ["TYO"], **first},
+            "second": {
+                "codes": ["OSA"], "depart_earliest": "2026-12-06",
+                "nights_min": 5, "nights_max": 5,
+            },
+            "try_both_orders": False, "warm": False,
+        }
+
+    def test_exact_dates_still_work(self, client, priced):
+        """舊式的 depart + back 不能壞掉 —— 它是這支端點原本的介面。"""
+        body = client.post(
+            "/api/reverse",
+            json=self._body(depart="2026-10-05", back="2026-10-10"),
+        ).json()
+        seq = body["groups"][0]["plans"][0]["sequence"]
+        assert (seq[0]["depart"], seq[0]["back"]) == ("2026-10-05", "2026-10-10")
+
+    def test_a_window_picks_the_priced_day_over_the_blank_one(self, client, priced):
+        """固定資料只在 10-05 有價。給一個涵蓋 10-03…10-07 的區間,
+        排名要自己挑中 10-05 —— 那正是使用者猜不到的那一天。"""
+        body = client.post(
+            "/api/reverse",
+            json=self._body(
+                depart_earliest="2026-10-03", depart_latest="2026-10-07",
+                nights_min=5, nights_max=5,
+            ),
+        ).json()
+        assert body["groups"][0]["plans"][0]["sequence"][0]["depart"] == "2026-10-05"
+
+    def test_combinations_are_ranked_by_real_price(self, client, priced):
+        """原本產生 144 種、取前 12、顯示第 0 種,而那個順序跟有沒有價格無關 ——
+        實測回傳的 12 組全部以 TPE→HND 開頭,HND 沒資料就全滅。"""
+        body = client.post(
+            "/api/reverse",
+            json=self._body(depart="2026-10-05", back="2026-10-10"),
+        ).json()
+        totals = [g["split_total"] for g in body["groups"]]
+        priced_only = [t for t in totals if t is not None]
+        assert priced_only == sorted(priced_only), "有價的要照便宜排"
+        assert totals.index(None) > len(priced_only) - 1 if None in totals else True
+
+    def test_the_total_is_the_four_one_ways_and_never_a_partial_sum(self, client, priced):
+        body = client.post(
+            "/api/reverse",
+            json=self._body(depart="2026-10-05", back="2026-10-10"),
+        ).json()
+        for group in body["groups"]:
+            legs = [
+                leg
+                for plan in group["plans"] if plan["method"] == "reverse"
+                for leg in plan["reference_legs"]
+            ]
+            if any(leg["price"] is None for leg in legs):
+                assert group["split_total"] is None, "缺一段就不給總價"
+                assert group["missing"]
+            else:
+                assert group["split_total"] == pytest.approx(
+                    sum(leg["price"] for leg in legs)
+                )

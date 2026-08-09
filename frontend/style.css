@@ -927,39 +927,52 @@ a.chip { text-decoration: none; }
 .chip__x { color: var(--ink-faint); font-size: 0.9rem; line-height: 1; }
 .chip--picked:hover .chip__x { color: var(--boundary); }
 
-.place__search {
-  width: 100%;
-  max-width: 26rem;
-  min-width: 0;
+.combo { position: relative; max-width: 26rem; }
+
+.combo__input { width: 100%; min-width: 0; }
+
+/* 絕對定位:清單展開時不能把下面的欄位推走,否則每次點開表單都會跳一下。 */
+.combo__list {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
+  max-height: 17rem;
+  overflow-y: auto;
+  display: grid;
+  gap: 1px;
+  padding: 0.25rem;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
 }
 
-.place__found { display: grid; gap: 0.25rem; max-width: 26rem; }
-.place__found:empty { display: none; }
-
-.place__hit {
+.combo__hit {
   display: flex;
   align-items: baseline;
   gap: 0.6rem;
   text-align: left;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  background: var(--paper);
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-radius: 2px;
+  background: none;
   cursor: pointer;
   font: inherit;
   color: var(--ink);
 }
 
-.place__hit:hover { border-color: var(--airway); background: var(--airway-soft); }
+.combo__hit:hover { background: var(--airway-soft); }
 
-.place__codes {
+.combo__codes {
   font-family: var(--mono);
   font-size: 0.72rem;
   color: var(--airway);
   letter-spacing: 0.06em;
 }
 
-.place__country { font-size: 0.72rem; color: var(--ink-faint); margin-left: auto; }
+.combo__country { font-size: 0.72rem; color: var(--ink-faint); margin-left: auto; }
 
 /* ---- 收起來的說明 ------------------------------------------------------- */
 

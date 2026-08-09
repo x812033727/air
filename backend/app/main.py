@@ -196,9 +196,12 @@ def country_airports(code: str, conn: sqlite3.Connection = Depends(get_conn)) ->
 
 @app.get("/api/ref/places")
 def search_places(
-    q: str, limit: int = 20, conn: sqlite3.Connection = Depends(get_conn)
+    q: str = "", limit: int = 20, conn: sqlite3.Connection = Depends(get_conn)
 ) -> dict[str, Any]:
-    """打字找地方。取代原本「選國家 → 從前 12 個城市裡點」的挑法。
+    """找地方。取代原本「選國家 → 從前 12 個城市裡點」的挑法。
+
+    `q` 留空回熱門清單 —— 那是給「還沒想好要打什麼」的人的。只有搜尋框的話,
+    不知道要打什麼的人一樣沒有路走,只是這次是卡在一個空白輸入框前面。
 
     那個挑法是**死路**,不是不方便:日本 72 個可飛城市只列得出 12 個,岡山、函館、
     石垣點不到,而畫面上寫著「日本 (77)」—— 看起來只是排在後面,實際上沒有那個
