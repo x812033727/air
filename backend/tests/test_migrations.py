@@ -13,8 +13,16 @@ import pytest
 
 from app.db import SCHEMA, _migrate
 
-# gate 欄位加進來之前的 price_cache。逐字保留,因為這正是伺服器上那張表。
-OLD_PRICE_CACHE = """
+# gate / name_en 加進來之前的表。逐字保留,因為這正是伺服器上那兩張表。
+OLD_SHAPE = """
+DROP TABLE price_cache;
+DROP TABLE airlines;
+
+CREATE TABLE airlines (
+    code    TEXT PRIMARY KEY,
+    name    TEXT NOT NULL
+);
+
 CREATE TABLE price_cache (
     origin          TEXT NOT NULL,
     destination     TEXT NOT NULL,
@@ -35,11 +43,26 @@ CREATE TABLE price_cache (
 
 @pytest.fixture
 def old_conn():
+    """一個真實的舊資料庫:新 schema 的 `IF NOT EXISTS` 對它完全沒有作用。
+
+    先跑一次現行 SCHEMA 再把那兩張表換成舊的形狀 —— 這正是伺服器上的狀態,
+    也是為什麼漏掉 ALTER 會在測試全綠的情況下讓每一個既有部署壞掉。
+    """
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    conn.executescript(OLD_PRICE_CACHE)
+    conn.executescript(SCHEMA)
+    conn.executescript(OLD_SHAPE)
     yield conn
     conn.close()
+
+
+def test_the_english_name_column_is_added_and_backfilled(old_conn):
+    """舊的 name 全是英文(中文譯名這次才加),所以搬過去就是正確的英文名。
+    沒有它,使用者打「EVA」會查不到一家明明就在清單裡的公司。"""
+    old_conn.execute("INSERT INTO airlines (code, name) VALUES ('BR', 'EVA Air')")
+    _migrate(old_conn)
+    row = old_conn.execute("SELECT name, name_en FROM airlines WHERE code='BR'").fetchone()
+    assert (row["name"], row["name_en"]) == ("EVA Air", "EVA Air")
 
 
 def _insert(conn, destination, airline):

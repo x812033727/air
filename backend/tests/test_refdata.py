@@ -49,9 +49,19 @@ class TestLoading:
         assert total == 8
 
     def test_airline_codes_get_names(self, loaded):
-        """價格資料只給代碼(TW、MM、IT),沒有這張表畫面上就只有兩個字母。"""
-        row = loaded.execute("SELECT name FROM airlines WHERE code='IT'").fetchone()
-        assert row["name"] == "Tigerair Taiwan"
+        """價格資料只給代碼(TW、MM、IT),沒有這張表畫面上就只有兩個字母。
+
+        中文名跟國家、城市一樣自己維護(上游實測只附英文),但英文名要留著 ——
+        使用者可能打「長榮」也可能打「EVA」,兩種都得找得到。"""
+        row = loaded.execute("SELECT name, name_en FROM airlines WHERE code='IT'").fetchone()
+        assert (row["name"], row["name_en"]) == ("台灣虎航", "Tigerair Taiwan")
+
+    def test_an_airline_with_no_chinese_name_keeps_the_english_one(self, loaded):
+        """沒收錄就回英文原名,不硬翻 —— 一個亂翻的公司名比英文原名更難認。"""
+        row = loaded.execute("SELECT name FROM airlines WHERE code='AA'").fetchone()
+        assert row["name"] == "美國航空"
+        row = loaded.execute("SELECT name FROM airlines WHERE code='MM'").fetchone()
+        assert row["name"] == "樂桃航空"
 
     def test_every_fetch_records_its_row_count(self, loaded):
         health = source_health(loaded)

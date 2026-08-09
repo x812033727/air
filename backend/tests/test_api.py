@@ -416,9 +416,18 @@ class TestAirlinePicker:
         assert set(codes[:3]) == {"BR", "IT", "MM"}
         assert codes.index("AA") > codes.index("BR")
 
-    def test_the_list_can_be_searched(self, client):
-        body = client.get("/api/ref/airlines?q=EVA").json()
+    @pytest.mark.parametrize("query", ["長榮", "EVA", "BR"])
+    def test_the_list_can_be_searched_in_either_language(self, client, query):
+        """同一個人可能打「長榮」、「EVA」或「BR」,取決於他上一次在哪裡看到那個名字。
+        只比對其中一種,另外兩種就會回「找不到」—— 而那家公司明明就在清單裡。"""
+        body = client.get(f"/api/ref/airlines?q={query}").json()
         assert any(a["code"] == "BR" for a in body["airlines"])
+
+    def test_the_default_list_is_not_padded_with_airlines_nobody_wants(self, client):
+        """全球一千多家,拿字母序補滿版面只會在長榮旁邊放一家沒人聽過的區域航空。"""
+        codes = [a["code"] for a in client.get("/api/ref/airlines").json()["airlines"]]
+        assert "AA" in codes          # 收錄過的照樣在
+        assert "2B" not in codes      # 沒收錄的不靠字母序擠進來
 
     def test_picking_an_airline_only_changes_the_google_link(self, client, priced):
         plain = client.post("/api/search", json=JAPAN_SEARCH).json()["results"][0]

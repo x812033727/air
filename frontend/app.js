@@ -347,13 +347,16 @@ function gapDetail(gap, alternatives, currency, label) {
   const box = el("div");
   if (!gap) return box;
 
-  for (const alt of gap.same_city || []) {
+  const nearby_ = gap.same_city || [];
+  if (nearby_.length) {
     const line = el("div", "alts alts--strong");
-    line.append(el("span", "alts__label", "同城的其他機場那天有票"));
-    line.append(
-      el("span", "alts__day",
-         `${alt.origin}→${alt.destination} ${alt.date.slice(5)} ${money(alt.price, currency)}`)
-    );
+    line.append(el("span", "alts__label", "同城的其他機場,同一天就有票"));
+    for (const alt of nearby_) {
+      line.append(
+        el("span", "alts__day",
+           `${alt.origin}→${alt.destination} ${money(alt.price, currency)}`)
+      );
+    }
     box.append(line);
   }
 

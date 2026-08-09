@@ -223,11 +223,16 @@ def _write_airlines(conn: sqlite3.Connection, payload: Iterable[dict[str, Any]])
         code = entry.get("code")
         if not code:
             continue
-        rows.append((code, _english(entry) or code))
+        # 上游實測只附英文,所以中文名跟國家、城市一樣自己維護;沒收錄的
+        # 就留英文原名,不硬翻 —— 一個亂翻的公司名比英文原名更難認。
+        name_en = _english(entry) or code
+        rows.append((code, zh_names.airline_name(code, name_en), name_en))
     conn.executemany(
         """
-        INSERT INTO airlines (code, name) VALUES (?, ?)
-        ON CONFLICT(code) DO UPDATE SET name = excluded.name
+        INSERT INTO airlines (code, name, name_en) VALUES (?, ?, ?)
+        ON CONFLICT(code) DO UPDATE SET
+            name = excluded.name,
+            name_en = excluded.name_en
         """,
         rows,
     )

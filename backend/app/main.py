@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import airlines, credentials, gaps, refdata, reverse, search
+from app import airlines, credentials, gaps, refdata, reverse, search, zh_names
 from app.combos import SpecTooLarge
 from app.config import settings
 from app.db import closing_conn, connect, init_db, source_health
@@ -174,22 +174,41 @@ def list_airlines(
 
     所以選單不受航線限制,而使用者選的東西**只會跟著連結出去**:
     Google Flights 那邊會真的只列這幾家,站內的排名一個字都不動。
+
+    沒帶 `q` 時只回收錄過的那幾家。全球有一千多家航空公司,拿字母序去補滿版面
+    只會在長榮旁邊放一家「2nd Arkhangelsk United Aviation Division」——
+    那不是更完整,是更難找。要找別家就打字搜尋。
     """
-    like = f"%{q.strip()}%"
-    rows = conn.execute(
-        """
-        SELECT code, name FROM airlines
-        WHERE LENGTH(code) = 2 AND (? = '' OR name LIKE ? OR code LIKE ?)
-        ORDER BY
-            CASE WHEN code IN ('BR','CI','JX','IT','JL','NH','MM','TW','CX','7C','TR','OZ','KE')
-                 THEN 0 ELSE 1 END,
-            name
-        LIMIT ?
-        """,
-        (q.strip(), like, like, max(1, min(limit, 200))),
-    ).fetchall()
+    query = q.strip()
+    limit = max(1, min(limit, 200))
+    if query:
+        like = f"%{query}%"
+        # 中文名、英文名、代碼三個都比對:同一個人可能打「長榮」、「EVA」
+        # 或「BR」,取決於他上一次是在哪裡看到那個名字。
+        rows = conn.execute(
+            """
+            SELECT code, name FROM airlines
+            WHERE LENGTH(code) = 2
+              AND (name LIKE ? OR COALESCE(name_en, '') LIKE ? OR code LIKE ?)
+            ORDER BY name LIMIT ?
+            """,
+            (like, like, like, limit),
+        ).fetchall()
+        found = [{"code": row["code"], "name": row["name"]} for row in rows]
+    else:
+        rows = conn.execute(
+            "SELECT code, name FROM airlines WHERE LENGTH(code) = 2"
+        ).fetchall()
+        found = sorted(
+            (
+                {"code": row["code"], "name": row["name"]}
+                for row in rows
+                if zh_names.airline_rank(row["code"]) < len(zh_names.AIRLINE_ZH)
+            ),
+            key=lambda a: zh_names.airline_rank(a["code"]),
+        )[:limit]
     return {
-        "airlines": [{"code": row["code"], "name": row["name"]} for row in rows],
+        "airlines": found,
         "note": "選了只會套用在 Google Flights 連結上,不影響站內排名。",
     }
 

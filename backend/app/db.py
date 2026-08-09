@@ -117,9 +117,13 @@ CREATE TABLE IF NOT EXISTS route_airlines (
     PRIMARY KEY (origin, destination, airline)
 );
 
+-- `name` is the Chinese one where we have it, `name_en` is always what the
+-- upstream feed said. Both are searchable because a traveller in Taipei will
+-- type 「長榮」, 「EVA」 or 「BR」 depending on where they last saw the name.
 CREATE TABLE IF NOT EXISTS airlines (
     code    TEXT PRIMARY KEY,
-    name    TEXT NOT NULL
+    name    TEXT NOT NULL,
+    name_en TEXT
 );
 
 CREATE TABLE IF NOT EXISTS fetch_log (
@@ -166,6 +170,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     which is all of them. Kept as a list of guarded ALTERs rather than a
     migration framework; two columns do not need Alembic.
     """
+    airline_columns = {row["name"] for row in conn.execute("PRAGMA table_info(airlines)")}
+    if "name_en" not in airline_columns:
+        conn.execute("ALTER TABLE airlines ADD COLUMN name_en TEXT")
+        # 既有的 name 全是英文(中文譯名這次才加),所以搬過去就是正確的
+        # 英文名 —— 下一次 refdata.refresh 會把中文寫回 name。
+        conn.execute("UPDATE airlines SET name_en = name WHERE name_en IS NULL")
+
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(price_cache)")}
     if "gate" not in columns:
         conn.execute("ALTER TABLE price_cache ADD COLUMN gate TEXT")

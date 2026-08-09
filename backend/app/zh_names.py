@@ -156,3 +156,46 @@ def airport_name(code: str, fallback: str) -> str:
     每列都要塞下兩三個機場的表格裡,長名字會把版面吃光。
     """
     return AIRPORT_ZH.get(code.upper(), fallback)
+
+
+# 航空公司。上游 `airlines.json` 實測也只有 `en`,所以同樣自己維護。
+#
+# **插入順序就是選單順序**,理由跟 `CITY_ZH` 一樣:照字母排,長榮會排在幾百家
+# 俄羅斯區域航空後面,那個選單沒有人用得下去。這份名單刻意只收台北出發真的搭得到
+# 的公司 —— 收得越全,前幾個就越不可能是使用者要找的那家。
+AIRLINE_ZH: dict[str, str] = {
+    # 台灣
+    "BR": "長榮航空", "CI": "中華航空", "JX": "星宇航空", "IT": "台灣虎航",
+    "AE": "華信航空", "B7": "立榮航空",
+    # 日本
+    "JL": "日本航空", "NH": "全日空", "MM": "樂桃航空", "GK": "捷星日本",
+    "ZG": "ZIPAIR", "IJ": "春秋航空日本", "7G": "星悅航空", "BC": "天馬航空",
+    # 韓國
+    "KE": "大韓航空", "OZ": "韓亞航空", "7C": "濟州航空", "TW": "德威航空",
+    "LJ": "真航空", "BX": "釜山航空", "RS": "首爾航空",
+    # 港澳・東南亞
+    "CX": "國泰航空", "HX": "香港航空", "UO": "香港快運", "NX": "澳門航空",
+    "SQ": "新加坡航空", "TR": "酷航", "TG": "泰國航空", "FD": "泰國亞航",
+    "VZ": "泰越捷", "MH": "馬來西亞航空", "AK": "亞洲航空", "VN": "越南航空",
+    "VJ": "越捷航空", "PR": "菲律賓航空", "5J": "宿霧太平洋", "GA": "印尼鷹航",
+    # 中國
+    "CA": "中國國際航空", "MU": "中國東方航空", "CZ": "中國南方航空",
+    "HU": "海南航空", "3U": "四川航空", "MF": "廈門航空",
+    # 長程
+    "UA": "聯合航空", "DL": "達美航空", "AA": "美國航空", "AC": "加拿大航空",
+    "QF": "澳洲航空", "NZ": "紐西蘭航空", "EK": "阿聯酋航空", "QR": "卡達航空",
+    "EY": "阿提哈德航空", "TK": "土耳其航空", "LH": "漢莎航空", "AF": "法國航空",
+    "KL": "荷蘭皇家航空", "BA": "英國航空", "AY": "芬蘭航空", "LX": "瑞士航空",
+    "SK": "北歐航空", "AI": "印度航空",
+}
+
+AIRLINE_RANK: dict[str, int] = {code: rank for rank, code in enumerate(AIRLINE_ZH)}
+
+
+def airline_name(code: str, fallback: str) -> str:
+    return AIRLINE_ZH.get(code.upper(), fallback)
+
+
+def airline_rank(code: str) -> int:
+    """Lower sorts first; anything unlisted lands after every listed airline."""
+    return AIRLINE_RANK.get(code.upper(), len(AIRLINE_RANK))
