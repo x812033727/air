@@ -843,12 +843,29 @@ function totalCard(group, currency) {
     card.append(el("div", "total__note",
       "反向票要比這個便宜才值得買。"));
   } else {
-    card.append(el("div", "total__label", "算不出總價"));
-    card.append(el("div", "total__price total__price--none",
-      group.missing.length ? `缺 ${group.missing.join("、")}` : "缺資料"));
-    card.append(el("div", "total__note",
-      "這個資料源大約只有三個月的視野,太遠的日期上游一列都沒有。" +
-      "把行程往前挪,或勾「前後幾天都可以」,通常就有價格了。"));
+    // 距今幾個月。超出視野的話,「缺 TPE→ITM…」這種列表會被讀成「壞了」,
+    // 但真正的訊息是「太遠了,而且站台這部分本來就幫不上忙 —— 其他部分還能用」。
+    const first = group.plans[0]?.sequence?.[0]?.depart;
+    const monthsOut = first
+      ? Math.round((new Date(first) - new Date()) / 86400000 / 30)
+      : null;
+
+    if (monthsOut != null && monthsOut >= 4) {
+      card.append(el("div", "total__label", "這組日期太遠,站台查不到價"));
+      card.append(el("div", "total__price total__price--none",
+        `出發還有大約 ${monthsOut} 個月`));
+      card.append(el("div", "total__note",
+        "這個資料源的快取是別人搜出來的,大約只有三個月的視野 —— 再遠就一列都沒有," +
+        "不是沒有班機。"));
+      card.append(el("div", "total__applied",
+        "下面的組票、日期、連結、比一比照常可以用:點連結查到真價,填回來就有答案。"));
+    } else {
+      card.append(el("div", "total__label", "算不出總價"));
+      card.append(el("div", "total__price total__price--none",
+        group.missing.length ? `缺 ${group.missing.join("、")}` : "缺資料"));
+      card.append(el("div", "total__note",
+        "把行程往前挪,或勾「前後幾天都可以」,通常就有價格了。"));
+    }
   }
   return card;
 }
