@@ -46,6 +46,24 @@
     </div>
     <p class="keys__state" id="key-state"></p>
 
+    <div class="keys__divider">
+      <p class="keys__note">
+        <strong>Duffel token(選填)</strong> —— 填了之後,兩張反向票可以直接查到
+        <strong>真正的開口票價</strong>,不用再自己去訂票網站填回來。
+        長榮與華航都在 Duffel 的支援清單上;<strong>星宇不在</strong>,那家還是要手動填。
+        到 <code>duffel.com</code> 申請,live token 需要驗證商業實體。
+      </p>
+      <div class="keys__fields">
+        <label class="field">
+          <span class="field__label">Duffel token</span>
+          <input type="password" id="key-duffel" autocomplete="off" spellcheck="false"
+                 placeholder="duffel_live_… 或 duffel_test_…">
+        </label>
+        <button type="button" class="btn btn--primary" id="duffel-save">儲存</button>
+      </div>
+      <p class="keys__state" id="duffel-state"></p>
+    </div>
+
     <div class="keys__divider" id="password-block" hidden>
       <p class="keys__note">
         這個站是用瀏覽器原生的帳號密碼鎖起來的,帳號是 <code>air</code>。

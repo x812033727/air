@@ -145,8 +145,15 @@ class ReverseIn(BaseModel):
 
 
 class KeysIn(BaseModel):
-    token: str = ""
-    marker: str = ""
+    """**沒帶到的欄位不會被動到,帶空字串才是清除。**
+
+    這個區別是付出代價才加上的:原本空字串一律當成刪除,所以一個只想存 Duffel
+    token 的請求把 Travelpayouts 的 token 一起洗掉了,而那把金鑰救不回來。
+    """
+
+    token: str | None = None
+    marker: str | None = None
+    duffel: str | None = None
 
 
 class PasswordIn(BaseModel):
@@ -421,7 +428,7 @@ def run_search(
 
 
 @app.post("/api/verify")
-def verify(body: VerifyIn) -> dict[str, Any]:
+def verify(body: VerifyIn, conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
     """即時實價:同一個行程,拼票買法與一張票買法並排。
 
     這裡是無狀態的 —— 請求帶著完整航段進來,所以不需要先跑一次搜尋、
@@ -433,7 +440,7 @@ def verify(body: VerifyIn) -> dict[str, Any]:
         for leg in body.legs
     )
     combo = Combo(legs=legs, shape_label="", is_baseline=False)
-    provider = get_provider()
+    provider = get_provider(credentials.duffel_token(conn))
 
     single = provider.price_single_ticket(combo, passengers=body.passengers, cabin=body.cabin)
     split = provider.price_split_tickets(combo, passengers=body.passengers, cabin=body.cabin)
@@ -831,11 +838,19 @@ def _serialise_plan(
 def read_keys(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
     """What key the site will use, and where it came from — never the key itself."""
     resolved = credentials.resolve(conn)
+    duffel = credentials.duffel_token(conn)
+    # marker 要獨立讀。`resolve()` 只有在 token 存在時才回報 marker,所以
+    # 「清掉 token 但留著 marker」的狀態下,畫面會顯示 marker 不見了 ——
+    # 然後使用者重填 token 時就會連 marker 一起重打。
+    marker = resolved.marker or credentials.stored_marker(conn)
     return {
         "configured": resolved.configured,
         "masked_token": resolved.masked_token,
-        "marker": resolved.marker,
+        "marker": marker,
         "source": resolved.source,
+        # Duffel:唯一報得出開口票真價的來源。回遮罩過的字串,不回金鑰本身。
+        "duffel_configured": bool(duffel),
+        "masked_duffel": credentials.masked(duffel),
     }
 
 
@@ -848,7 +863,7 @@ def write_keys(body: KeysIn, conn: sqlite3.Connection = Depends(get_conn)) -> di
     behind a password now, so that reason is gone — and "saved on the website"
     meaning "only on this one browser" is indistinguishable from broken.
     """
-    credentials.store(conn, token=body.token, marker=body.marker)
+    credentials.store(conn, token=body.token, marker=body.marker, duffel=body.duffel)
     return read_keys(conn)
 
 
@@ -917,7 +932,7 @@ def health(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
             "cached_prices": keys.configured,
             "key_source": keys.source,
             "live_prices": settings.has_live_prices,
-            "live_provider": get_provider().name,
+            "live_provider": get_provider(credentials.duffel_token(conn)).name,
             "price_month_endpoint": settings.price_month_endpoint,
             "currency": settings.default_currency,
             "can_change_password": settings.can_change_password,

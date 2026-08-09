@@ -22,6 +22,9 @@ const state = {
   // 匯率。外站出發那張票用外幣賣,不換算就沒辦法比。
   fx: {},
   fxBase: "TWD",
+  // 有沒有接上能報開口票真價的來源(Duffel)。沒有的話「查真價」按鈕不出現 ——
+  // 一顆按下去只會回「未設定」的按鈕是白費一次點擊。
+  hasLivePricing: false,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -291,6 +294,7 @@ async function loadStatus() {
     const strip = $("#status-strip");
     strip.replaceChildren();
 
+    state.hasLivePricing = health.config.live_provider !== "deeplink";
     const pricing = health.config.cached_prices;
     const chip = el(
       "span",
@@ -341,6 +345,16 @@ async function renderKeyState() {
   }
   $("#key-token").value = "";
   $("#key-marker").value = keys.marker || "";
+
+  const duffel = $("#duffel-state");
+  if (keys.duffel_configured) {
+    duffel.className = "keys__state keys__state--ok";
+    duffel.textContent = `已儲存 ${keys.masked_duffel} —— 反向票可以查真價了`;
+  } else {
+    duffel.className = "keys__state";
+    duffel.textContent = "尚未填入,兩張反向票的價格要自己去訂票網站查了填回來";
+  }
+  $("#key-duffel").value = "";
 }
 
 /** 把舊版存在這台瀏覽器裡的金鑰搬到伺服器,搬完清掉本機那份。
@@ -391,6 +405,26 @@ function wireKeyPanel() {
     } catch (error) {
       $("#key-state").className = "keys__state keys__state--bad";
       $("#key-state").textContent = error.message;
+    }
+  });
+
+  $("#duffel-save").addEventListener("click", async () => {
+    const duffel = $("#key-duffel").value.trim();
+    try {
+      await api("/api/keys", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // 只送 duffel。沒送到的欄位後端不會動 —— 這條規則是用一把被洗掉的
+        // 金鑰換來的,別再送空字串進去。
+        body: JSON.stringify({ duffel }),
+      });
+      await renderKeyState();
+      await loadStatus();
+      showNotice("Duffel token 已儲存",
+        "再按一次「組票」,兩張反向票就會去查真正的開口票價。", "info", "duffel-saved");
+    } catch (error) {
+      $("#duffel-state").className = "keys__state keys__state--bad";
+      $("#duffel-state").textContent = error.message;
     }
   });
 
@@ -682,7 +716,11 @@ function ticketRow(ticket, currency) {
 
   body.append(linkChips(ticket.links));
   // 只有整張票才要填 —— 單程票站台自己算得出來。
-  if (!ticket.priceable && ticket.legs.length > 1) body.append(quoteRow(ticket));
+  if (!ticket.priceable && ticket.legs.length > 1) {
+    const row = quoteRow(ticket);
+    if (state.hasLivePricing) row.append(liveButton(ticket, row));
+    body.append(row);
+  }
 
   row.append(body);
   return row;
@@ -944,6 +982,58 @@ function toBase(quote) {
   if (quote.currency === state.fxBase) return quote.amount;
   const rate = state.fx[quote.currency];
   return rate ? quote.amount / rate : null;
+}
+
+/** 直接去 Duffel 問這張開口票的真價。
+ *
+ *  這是唯一能報開口來回票真價的來源,而 `/api/verify` 早就會把每一段送成獨立的
+ *  slice —— 也就是說「台北→大阪 ＋ 東京→台北」本來就是一個合法的 offer request。
+ *  少的只是一顆按鈕跟一個 token。
+ *
+ *  ⚠️ 長榮、華航在 Duffel 的清單上,**星宇不在** —— 那家還是要手動填。
+ *  而且很多城市對根本沒有可售的單一開口票,回不到價是正常的,不是壞掉。 */
+function liveButton(ticket, row) {
+  const button = el("button", "chip", "查真價");
+  button.type = "button";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "查詢中…";
+    try {
+      const body = await api("/api/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          legs: ticket.legs.map((l) => ({
+            origin: l.origin, destination: l.destination, date: l.date,
+          })),
+          passengers: Number($("#rev-passengers").value) || 1,
+          cabin: $("#rev-cabin").value,
+        }),
+      });
+      const quote = body.single_ticket;
+      if (quote.total == null) {
+        button.disabled = false;
+        button.textContent = "查真價";
+        row.append(el("span", "quote__note", quote.unavailable_reason));
+        return;
+      }
+      // 查到就直接填進欄位,連幣別一起 —— 使用者不必再抄一次。
+      const input = row.querySelector(".quote__input");
+      const currency = row.querySelector(".quote__currency");
+      input.value = Math.round(quote.total);
+      if ([...currency.options].some((o) => o.value === quote.currency)) {
+        currency.value = quote.currency;
+      }
+      input.dispatchEvent(new Event("input"));
+      button.replaceWith(el("span", "quote__note",
+        `Duffel:${quote.carrier || "查到"}・${quote.offer_count} 個票種`));
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "查真價";
+      showNotice("查真價沒有成功", error.message, "alert");
+    }
+  });
+  return button;
 }
 
 /** 比一比:兩張反向票 vs 四段全拆單程。

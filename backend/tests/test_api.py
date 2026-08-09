@@ -724,3 +724,47 @@ class TestCountryThenCity:
         english = [i for i, c in enumerate(countries) if not c["translated"]]
         if english and translated:
             assert max(translated) < min(english)
+
+
+class TestSavingOneKeyNeverWipesAnother:
+    """付出代價才寫的一組測試。
+
+    金鑰原本三個欄位都是 `str`,空字串一律刪除 —— 於是一個「只存 Duffel token」
+    的請求把使用者親手貼上來的 Travelpayouts token 一起洗掉了,而 SQLite 隨即
+    把那一頁歸零,救不回來。表單只送它要改的那一格,所以**沒送到的欄位必須是
+    「不要動」,不能是「清空」**。
+    """
+
+    def test_saving_only_duffel_leaves_the_search_key_alone(self, client):
+        client.put("/api/keys", json={"token": "tp-key-1234567890", "marker": "761868"})
+        client.put("/api/keys", json={"duffel": "duffel_test_abc123"})
+
+        keys = client.get("/api/keys").json()
+        assert keys["configured"] is True, "存 Duffel 不該動到查價金鑰"
+        assert keys["marker"] == "761868"
+        assert keys["duffel_configured"] is True
+
+    def test_saving_only_the_search_key_leaves_duffel_alone(self, client):
+        client.put("/api/keys", json={"duffel": "duffel_test_abc123"})
+        client.put("/api/keys", json={"token": "tp-key-9876543210", "marker": "1"})
+        assert client.get("/api/keys").json()["duffel_configured"] is True
+
+    def test_an_explicit_empty_string_still_clears(self, client):
+        """「不動它」跟「清掉」要分得開,否則就沒有辦法清除了。"""
+        client.put("/api/keys", json={"duffel": "duffel_test_abc123"})
+        client.put("/api/keys", json={"duffel": ""})
+        assert client.get("/api/keys").json()["duffel_configured"] is False
+
+    def test_the_marker_survives_losing_the_token(self, client):
+        """resolve() 只在 token 存在時回報 marker,所以清掉 token 之後畫面會
+        顯示 marker 也不見了 —— 然後使用者重填時會連 marker 一起重打。"""
+        client.put("/api/keys", json={"token": "tp-key-1234567890", "marker": "761868"})
+        client.put("/api/keys", json={"token": ""})
+        assert client.get("/api/keys").json()["marker"] == "761868"
+
+    def test_the_key_itself_never_comes_back(self, client):
+        client.put("/api/keys", json={"token": "tp-key-1234567890", "duffel": "duffel_test_xyz"})
+        body = client.get("/api/keys").json()
+        assert "tp-key-1234567890" not in str(body)
+        assert "duffel_test_xyz" not in str(body)
+        assert body["masked_duffel"] and "…" in body["masked_duffel"]

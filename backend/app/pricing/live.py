@@ -219,8 +219,13 @@ class DuffelProvider:
         return SplitQuote(legs=quotes, currency=currency)
 
 
-def get_provider() -> LivePriceProvider:
-    """Pick the live provider the current configuration supports."""
-    if settings.has_live_prices:
-        return DuffelProvider()
+def get_provider(token: str | None = None) -> LivePriceProvider:
+    """Pick the live provider the current configuration supports.
+
+    `token` 讓呼叫端把**存在站台上**的金鑰傳進來 —— 使用者是在網頁上填的,
+    不是在部署時寫進 .env 的,所以不能只看環境變數。
+    """
+    resolved = token if token is not None else settings.duffel_token
+    if resolved:
+        return DuffelProvider(resolved)
     return DeepLinkProvider()
