@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app import airlines, credentials, refdata, reverse, search
+from app import airlines, credentials, gaps, refdata, reverse, search
 from app.combos import SpecTooLarge
 from app.config import settings
 from app.db import closing_conn, connect, init_db, source_health
@@ -78,6 +78,10 @@ class SearchIn(BaseModel):
     internal_links: list[Literal["fly", "surface"]] | None = None
     passengers: int = Field(1, ge=1, le=9)
     cabin: Literal["economy", "premium_economy", "business", "first"] = "economy"
+    # 想搭的航空公司。**不影響排名** —— 排名用的快取價沒有航空公司欄位,
+    # 所以拿它去篩會篩掉航線卻篩不掉價格,顯示的數字根本不是那家的。
+    # 它只跟著深連結出去,讓點過去的搜尋只列這幾家。
+    airlines: list[str] = Field(default_factory=list, max_length=20)
 
 
 class LegIn(BaseModel):
@@ -102,6 +106,8 @@ class ReverseIn(BaseModel):
     warm: bool = True
     passengers: int = Field(1, ge=1, le=9)
     cabin: Literal["economy", "premium_economy", "business", "first"] = "economy"
+    # 同 SearchIn:只跟著連結出去,不參與任何排名或計價。
+    airlines: list[str] = Field(default_factory=list, max_length=20)
 
 
 class KeysIn(BaseModel):
@@ -155,6 +161,39 @@ def country_airports(code: str, conn: sqlite3.Connection = Depends(get_conn)) ->
     }
 
 
+@app.get("/api/ref/airlines")
+def list_airlines(
+    q: str = "", limit: int = 40, conn: sqlite3.Connection = Depends(get_conn)
+) -> dict[str, Any]:
+    """航空公司清單,給「只想搭這幾家」那個選單用。
+
+    ⚠️ 這是一份**全球清單**,不是「這條航線有誰飛」。route-level 的資料我們有,
+    但它薄到不能當選單:免費的 routes.json 裡台北出發的日本線還列著已經停業的
+    復興(GE)與捷星亞洲(3K),卻沒有星宇(JX)跟台灣虎航(IT) —— 一個把
+    JX 藏起來、把 GE 端出來的選單,比沒有選單更糟。
+
+    所以選單不受航線限制,而使用者選的東西**只會跟著連結出去**:
+    Google Flights 那邊會真的只列這幾家,站內的排名一個字都不動。
+    """
+    like = f"%{q.strip()}%"
+    rows = conn.execute(
+        """
+        SELECT code, name FROM airlines
+        WHERE LENGTH(code) = 2 AND (? = '' OR name LIKE ? OR code LIKE ?)
+        ORDER BY
+            CASE WHEN code IN ('BR','CI','JX','IT','JL','NH','MM','TW','CX','7C','TR','OZ','KE')
+                 THEN 0 ELSE 1 END,
+            name
+        LIMIT ?
+        """,
+        (q.strip(), like, like, max(1, min(limit, 200))),
+    ).fetchall()
+    return {
+        "airlines": [{"code": row["code"], "name": row["name"]} for row in rows],
+        "note": "選了只會套用在 Google Flights 連結上,不影響站內排名。",
+    }
+
+
 @app.post("/api/ref/refresh")
 def refresh_refdata(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
     return {"written": refdata.refresh(conn)}
@@ -185,6 +224,7 @@ def _to_request(body: SearchIn, conn: sqlite3.Connection):
             internal_links=body.internal_links,
             passengers=body.passengers,
             cabin=body.cabin,
+            airlines=body.airlines,
         )
     except search.UnknownPlace as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -408,6 +448,9 @@ def reverse_plans(
 
     lookup = cached.load_lookup(conn, pairs)
     fetched = cached.fetched_routes(conn)
+    siblings = refdata.siblings_by_airport(
+        conn, {code for pair in pairs for code in pair}
+    )
 
     return {
         "warnings": warnings,
@@ -417,7 +460,7 @@ def reverse_plans(
         "groups": [
             {
                 "plans": [
-                    _serialise_plan(plan, lookup, fetched, body, conn)
+                    _serialise_plan(plan, lookup, fetched, body, conn, siblings)
                     for plan in group
                 ]
             }
@@ -430,7 +473,9 @@ def reverse_plans(
 REVERSE_GROUP_LIMIT = 12
 
 
-def _serialise_plan(plan, lookup, fetched, body: ReverseIn, conn=None) -> dict[str, Any]:
+def _serialise_plan(
+    plan, lookup, fetched, body: ReverseIn, conn=None, siblings=None
+) -> dict[str, Any]:
     # 單程票各自標價;plan 級的總價只在整個買法都可計價時給(即四段全拆),
     # 而且沿用「缺一段就不給總價」的規則,絕不做部分加總。
     ticket_pricing = {
@@ -475,22 +520,24 @@ def _serialise_plan(plan, lookup, fetched, body: ReverseIn, conn=None) -> dict[s
                         ],
                         # 「查無資料」單獨擺在那裡是條死路。這條航線通常還是有
                         # 幾天有價的(實測 OKA→TPE 在 2026-12 有 10 天,只是最早
-                        # 從 12-16 開始),把那些日子講出來就變成下一步。
+                        # 從 12-16 開始),把那些日子講出來就變成下一步;真的一天
+                        # 都沒有的時候,說出「一天都沒有」也比一句「查無資料」有用。
                         "alternatives": [
                             {
                                 "leg": f"{leg.origin}→{leg.destination}",
-                                "days": [
-                                    {
-                                        "date": point.depart_date.isoformat(),
-                                        "price": point.price,
-                                        "days_away": (
-                                            point.depart_date - leg.depart_date
-                                        ).days,
-                                    }
-                                    for point in cached.nearest_priced_dates(
-                                        conn, leg.origin, leg.destination, leg.depart_date
+                                **gaps.serialise(
+                                    cached.explain_gap(
+                                        conn,
+                                        leg.origin,
+                                        leg.destination,
+                                        leg.depart_date,
+                                        fetched=fetched,
+                                        sibling_origins=(siblings or {}).get(leg.origin, ()),
+                                        sibling_destinations=(siblings or {}).get(
+                                            leg.destination, ()
+                                        ),
                                     )
-                                ],
+                                ),
                             }
                             for leg in ticket_pricing[i].missing_legs
                         ]
@@ -509,7 +556,10 @@ def _serialise_plan(plan, lookup, fetched, body: ReverseIn, conn=None) -> dict[s
                     for leg in ticket.legs
                 ],
                 "links": deeplinks.links_for_single_ticket(
-                    ticket.combo, passengers=body.passengers, cabin=body.cabin
+                    ticket.combo,
+                    passengers=body.passengers,
+                    cabin=body.cabin,
+                    airlines=body.airlines,
                 ),
             }
             for i, ticket in enumerate(plan.tickets)

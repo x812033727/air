@@ -103,6 +103,29 @@
     </button>
   </div>
 
+  <!-- 兩個模式共用。選了航空公司之後會變的只有連結,排名一個字都不動 —— 那條線
+       必須畫在畫面上,不然使用者會以為左邊的價格是他選的那家的。 -->
+  <details class="panel panel--slim" id="airline-panel">
+    <summary class="airlines__summary">
+      <span class="eyebrow">只想搭這幾家</span>
+      <span class="airlines__count" id="airline-count">不限</span>
+    </summary>
+    <div class="airlines__body">
+      <p class="airlines__note">
+        選了之後,每一列的 <strong>Google Flights</strong> 連結會只列這幾家。
+        <strong>站內的排名與價格不會變</strong> —— 我們排名用的快取價根本沒有航空公司
+        欄位,拿它去篩會篩掉航線卻篩不掉價格,顯示的數字就不是那家的了。
+      </p>
+      <div class="airlines__chips" id="airline-chips"></div>
+      <label class="field">
+        <span class="field__label">找其他航空公司</span>
+        <input type="search" id="airline-search" autocomplete="off"
+               placeholder="打名字或代碼,例如 Starlux / JX">
+      </label>
+      <div class="airlines__chips" id="airline-found"></div>
+    </div>
+  </details>
+
   <section class="panel" id="single-panel" aria-labelledby="plan-heading">
     <h2 class="eyebrow" id="plan-heading">行程</h2>
 
@@ -155,6 +178,9 @@
       同樣去兩次,中間那張<strong>倒買票</strong>以外站(第一趟的目的地)為出發地計價 ——
       省錢與便宜商務艙都來自那張;頭尾兩段拆成單程交給廉航。
       <strong>第二趟必須整個在第一趟之後</strong>,因為同一張票上的兩段必須依序使用。
+      兩張票要<strong>同時買</strong>,所以這是「我確定兩趟都會去」換來的價差,
+      不是一個搜尋結果;<strong>傳統航空的旺季最有感</strong>,而廉航促銷常常還是更便宜,
+      所以下面的連結一定要點開比過再決定。
     </p>
 
     <form id="reverse-form">

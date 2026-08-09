@@ -122,3 +122,53 @@ class TestAssembly:
             raw = decode(entry["google_flights"])
             assert raw.endswith(b"\x98\x01\x02")
             assert expected.origin.encode() in raw
+
+
+class TestAirlineFilter:
+    """航空公司篩選是**航段裡的欄位 6**,重複出現一次代表一家。
+
+    這個欄位編號是實測來的:在 Chromium 開一次 TPE→NRT,用 Google 自己的
+    篩選面板勾「僅限長榮」,再把它產生的 URL 讀回來解碼。猜欄位編號的下場
+    上次已經見過一次 —— 目的地誤用欄位 16,連結照樣打得開,只是目的地是空白的。
+    """
+
+    # 2026-08-09 於 Chromium 實測:此連結開啟後,篩選列顯示
+    # 「長榮航空 +1, 航空公司, 已選取」。
+    VERIFIED_TWO_AIRLINE_TFS = (
+        "GiISCjIwMjYtMTAtMDcyAkJSMgJDSWoFEgNUUEVyBRIDTlJUQAFIAZgBAg"
+    )
+
+    def test_the_verified_bytes_are_reproduced_exactly(self):
+        leg = FlightLeg("TPE", "NRT", date(2026, 10, 7), "台北", "東京")
+        url = deeplinks.google_flights_url([leg], airlines=["BR", "CI"])
+        assert url.split("tfs=")[1].split("&")[0] == self.VERIFIED_TWO_AIRLINE_TFS
+
+    def test_picking_nobody_leaves_the_link_byte_for_byte_unchanged(self):
+        """沒選航空公司的連結必須跟以前一模一樣,否則這次改動會悄悄改掉
+        每一條既有連結,而那些連結是這個站唯一的出口。"""
+        assert deeplinks.google_flights_url([OUTBOUND, INBOUND]) == deeplinks.google_flights_url(
+            [OUTBOUND, INBOUND], airlines=[]
+        )
+        assert decode(deeplinks.google_flights_url([OUTBOUND, INBOUND])) == base64.urlsafe_b64decode(
+            VERIFIED_OPEN_JAW_TFS + "=" * (-len(VERIFIED_OPEN_JAW_TFS) % 4)
+        )
+
+    def test_every_leg_carries_the_filter(self):
+        """多停點的篩選是逐段設定的 —— Google 自己的介面就是這樣寫進 URL 的。
+        只設第一段,後面幾段會回到「所有航空公司」。"""
+        url = deeplinks.google_flights_url([OUTBOUND, INBOUND], airlines=["BR"])
+        assert decode(url).count(b"BR") == 2
+
+    def test_junk_codes_are_dropped_rather_than_forwarded(self):
+        """一個亂碼篩選會讓 Google 回一張空清單,而空清單長得就像
+        「那天沒有班機」—— 正好是這次改動要消滅的那句誤導。"""
+        assert deeplinks.normalise_airlines(["br", "BR", "", "LONG", "C I", None]) == ("BR",)
+
+    def test_the_other_two_sites_are_left_unfiltered(self):
+        """Kayak 擋機器人、Aviasales 的參數沒驗過。送一個沒驗證過的篩選參數出去,
+        壞掉的樣子跟「真的沒有班機」分不開,所以寧可不帶。"""
+        combo = Combo(legs=(OUTBOUND, INBOUND), shape_label="x", is_baseline=False)
+        links = deeplinks.links_for_single_ticket(combo, airlines=["BR"])
+        assert "BR" not in links["kayak"]
+        assert "BR" not in links["aviasales"]
+        assert b"BR" in decode(links["google_flights"])

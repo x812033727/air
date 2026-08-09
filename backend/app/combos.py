@@ -157,6 +157,9 @@ class SearchRequest:
     passengers: int = 1
     cabin: str = "economy"
     currency: str = "TWD"
+    # 想搭的航空公司(IATA)。**這不會改變排名**,因為排名用的快取價根本沒有
+    # 航空公司欄位 —— 它只會跟著深連結出去,讓點過去的搜尋只列這幾家。
+    airlines: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.stops:

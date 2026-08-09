@@ -357,3 +357,132 @@ class TestNearbyDates:
 
     def test_a_route_with_nothing_nearby_returns_empty(self, conn):
         assert cached.nearest_priced_dates(conn, "KIX", "TPE", date(2026, 12, 13)) == []
+
+
+class TestGateIsNotAnAirline:
+    """`gate` 是訂票網站,`airline` 是航空公司。實測 month-matrix 只給得出前者:
+    Kupi.com、Aviakassa、City.Travel 全都出現在 `gate` 欄位裡,而整個端點
+    根本沒有航空公司欄位。
+
+    把 gate 當 airline 存,航空公司篩選就會把「Kupi.com」當成一家航空公司端出來,
+    而且那個錯誤在畫面上完全合理 —— 它就是一個看起來像公司名的字串。
+    """
+
+    def test_month_matrix_leaves_the_airline_unknown(self):
+        payload = {
+            "data": [
+                {"depart_date": "2026-10-05", "return_date": "", "value": 6800,
+                 "gate": "Kupi.com"},
+            ],
+        }
+        (found,) = parse_month_payload("month-matrix", payload, "TPE", "NRT", "TWD")
+        assert found.gate == "Kupi.com"
+        assert found.airline is None
+
+    def test_calendar_really_does_carry_the_carrier(self):
+        payload = {
+            "data": {
+                "2026-10-05": {"price": 6800, "airline": "BR", "flight_number": 189,
+                               "departure_at": "2026-10-05T09:00:00+08:00"},
+            },
+        }
+        (found,) = parse_month_payload("calendar", payload, "TPE", "NRT", "TWD")
+        assert found.airline == "BR"
+        assert found.gate is None
+
+
+class TestExplainingAMissingPrice:
+    """四種空價格,四種下一步。全部併成「查無資料」就是把使用者能做的事一起藏起來。"""
+
+    @pytest.fixture
+    def conn(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(SCHEMA)
+        now = utcnow().isoformat()
+
+        def price(origin, destination, day, value):
+            connection.execute(
+                """INSERT INTO price_cache (origin, destination, depart_date, currency,
+                       price, transfers, airline, gate, flight_number, found_at,
+                       fetched_at, expires_at, source)
+                   VALUES (?,?,?,'TWD',?,0,NULL,NULL,NULL,NULL,?,?,'test')""",
+                (origin, destination, day, value, now, now),
+            )
+
+        def asked(origin, destination, month, rows):
+            connection.execute(
+                "INSERT INTO route_fetch VALUES (?,?,?,'TWD',?,?,?)",
+                (origin, destination, month, rows, now, now),
+            )
+
+        # 實測的大阪:同城兩個機場,一個幾乎沒資料,一個滿的。
+        asked("ITM", "TPE", "2026-12", 3)
+        for day, value in [("2026-12-02", 6476), ("2026-12-04", 7149)]:
+            price("ITM", "TPE", day, value)
+        asked("KIX", "TPE", "2026-12", 28)
+        price("KIX", "TPE", "2026-12-13", 3808)
+        # 實測的福岡:整個月一列都沒有。
+        asked("FUK", "TPE", "2026-10", 0)
+        # 只有遠處有價的航線。
+        asked("OKA", "TPE", "2026-12", 10)
+        price("OKA", "TPE", "2026-12-30", 3072)
+        yield connection
+        connection.close()
+
+    def test_a_route_month_nobody_asked_about_says_so(self, conn):
+        gap = cached.explain_gap(conn, "CTS", "TPE", date(2026, 12, 13))
+        assert gap.reason == "not_fetched"
+
+    def test_a_route_month_with_no_rows_at_all_is_not_the_same_thing(self, conn):
+        """查過了、整個月一列都沒有 —— 挪日期沒有用,只能換機場或換月份。
+        這正是使用者回報「還是沒拿到價格」時看到的那一格:附近沒有日子可以推薦。"""
+        gap = cached.explain_gap(conn, "FUK", "TPE", date(2026, 10, 12))
+        assert gap.reason == "route_empty"
+        assert gap.nearby == ()
+
+    def test_nearby_days_are_offered_when_they_exist(self, conn):
+        gap = cached.explain_gap(conn, "ITM", "TPE", date(2026, 12, 13))
+        assert gap.reason == "nearby"
+        assert [p.depart_date.isoformat() for p in gap.nearby][:1] == ["2026-12-04"]
+
+    def test_prices_beyond_the_near_window_still_beat_saying_nothing(self, conn):
+        """12-30 離 12-13 有十七天,不算「附近」—— 但「這個月有票、要整趟往後挪」
+        跟「這條航線根本沒有票」是兩件事,而且使用者要做的事完全不同。"""
+        gap = cached.explain_gap(conn, "OKA", "TPE", date(2026, 12, 13))
+        assert gap.reason == "far_only"
+        assert [p.depart_date.isoformat() for p in gap.nearby] == ["2026-12-30"]
+
+    def test_last_months_leftovers_never_answer_this_months_question(self, conn):
+        """快取是跨搜尋共用的:上一次查 10 月留下的票還躺在裡面。放寬距離時不綁月份,
+        就會拿 10-30 的票去回答 12-08 的問題,再配上一句寫著「2026-12」的說明 ——
+        那不是資訊不足,是直接說錯話。而且兩者要做的事完全不同:挪三天 vs 整趟重排。"""
+        now = utcnow().isoformat()
+        conn.execute(
+            """INSERT INTO price_cache (origin, destination, depart_date, currency,
+                   price, transfers, airline, gate, flight_number, found_at,
+                   fetched_at, expires_at, source)
+               VALUES ('TPE','ITM','2026-10-30','TWD',7051,0,NULL,NULL,NULL,NULL,?,?,'test')""",
+            (now, now),
+        )
+        conn.execute(
+            "INSERT INTO route_fetch VALUES ('TPE','ITM','2026-12','TWD',0,?,?)",
+            (now, now),
+        )
+        gap = cached.explain_gap(conn, "TPE", "ITM", date(2026, 12, 8))
+        assert gap.reason == "route_empty"
+        assert gap.nearby == ()
+
+    def test_the_same_city_next_door_is_an_answer_that_needs_no_date_change(self, conn):
+        """伊丹那天沒有價,關西那天有 —— 同一天、同一個城市、換一個機場。
+        資料早就在同一次搜尋裡抓回來了,因為城市本來就展開成多個機場。"""
+        gap = cached.explain_gap(
+            conn, "ITM", "TPE", date(2026, 12, 13), sibling_origins=("ITM", "KIX")
+        )
+        assert [(p.origin, p.price) for p in gap.same_city] == [("KIX", 3808)]
+
+    def test_the_airport_itself_is_never_offered_as_its_own_alternative(self, conn):
+        gap = cached.explain_gap(
+            conn, "KIX", "TPE", date(2026, 12, 2), sibling_origins=("ITM", "KIX")
+        )
+        assert all(p.origin != "KIX" for p in gap.same_city)

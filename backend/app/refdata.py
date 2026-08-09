@@ -352,6 +352,38 @@ def expand_airports(conn: sqlite3.Connection, codes: Iterable[str]) -> list[Airp
     ]
 
 
+def siblings_by_airport(
+    conn: sqlite3.Connection, codes: Iterable[str]
+) -> dict[str, tuple[str, ...]]:
+    """每個機場所在城市的所有可飛機場,包含自己。
+
+    同城替代是「那天沒有價」最好的一條出路,因為連日期都不用改 —— 大阪的
+    ITM→TPE 在 2026-12 只有 3 天有價,同城的 KIX→TPE 有 28 天。查一次全部拿完,
+    因為呼叫端手上是一整批航段,一段一問就是 N 次查詢換一個常數大小的答案。
+    """
+    wanted = sorted({code.strip().upper() for code in codes if code and code.strip()})
+    if not wanted:
+        return {}
+    placeholders = ",".join("?" * len(wanted))
+    rows = conn.execute(
+        f"""
+        SELECT mine.code AS code, peer.code AS peer
+        FROM airports mine
+        JOIN airports peer ON peer.city_code = mine.city_code
+        WHERE mine.code IN ({placeholders})
+          AND peer.flightable = 1 AND peer.iata_type = 'airport'
+          AND mine.city_code IS NOT NULL
+        ORDER BY peer.code
+        """,
+        wanted,
+    ).fetchall()
+
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        grouped.setdefault(row["code"], []).append(row["peer"])
+    return {code: tuple(peers) for code, peers in grouped.items()}
+
+
 def is_stale(conn: sqlite3.Connection, max_age_days: int = 7) -> bool:
     row = conn.execute(
         """

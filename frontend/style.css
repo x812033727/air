@@ -850,3 +850,49 @@ a.chip { text-decoration: none; }
   padding: 0.1rem 0.35rem;
   white-space: nowrap;
 }
+
+/* 同城的其他機場那天有票 —— 這是唯一一條連日期都不用改的出路,所以它比
+   「附近幾天有價」更值得被看見。 */
+.alts--strong .alts__label { color: var(--airway); }
+
+.alts--strong .alts__day {
+  color: var(--airway);
+  border-color: var(--airway);
+  background: var(--airway-soft);
+}
+
+/* ---- 航空公司選單 ------------------------------------------------------- */
+
+.panel--slim { padding: 0.9rem 1.5rem; }
+
+.airlines__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.airlines__summary::-webkit-details-marker { display: none; }
+.airlines__summary::before { content: "＋ "; color: var(--ink-faint); }
+#airline-panel[open] .airlines__summary::before { content: "− "; }
+
+.airlines__count {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--airway);
+}
+
+.airlines__body { padding-top: 0.9rem; display: grid; gap: 0.7rem; }
+
+.airlines__note {
+  font-size: 0.82rem;
+  line-height: 1.7;
+  color: var(--ink-soft);
+  margin: 0;
+}
+
+.airlines__note strong { color: var(--airway); font-weight: 600; }
+
+.airlines__chips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.airlines__chips:empty { display: none; }

@@ -61,6 +61,11 @@ CREATE INDEX IF NOT EXISTS idx_airports_city ON airports(city_code);
 CREATE INDEX IF NOT EXISTS idx_airports_country ON airports(country_code);
 
 -- One row per (route, departure day). Refreshed wholesale per route-month.
+-- `airline` and `gate` are two different things and conflating them is how a
+-- price ends up labelled 「Kupi.com 航空」. `gate` is the booking site that
+-- quoted the fare (City.Travel, Aviakassa, Kupi.com); `airline` is the carrier
+-- that flies it. month-matrix only ever supplies `gate`, so `airline` on those
+-- rows is legitimately NULL and must stay NULL.
 CREATE TABLE IF NOT EXISTS price_cache (
     origin          TEXT NOT NULL,
     destination     TEXT NOT NULL,
@@ -69,6 +74,7 @@ CREATE TABLE IF NOT EXISTS price_cache (
     price           REAL,
     transfers       INTEGER,
     airline         TEXT,
+    gate            TEXT,
     flight_number   TEXT,
     found_at        TEXT,
     fetched_at      TEXT NOT NULL,
@@ -148,7 +154,33 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 def init_db(path: Path | None = None) -> None:
     with closing_conn(path) as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring an existing database up to the current schema.
+
+    `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists,
+    so a new column is invisible to every deployment that has run before —
+    which is all of them. Kept as a list of guarded ALTERs rather than a
+    migration framework; two columns do not need Alembic.
+    """
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(price_cache)")}
+    if "gate" not in columns:
+        conn.execute("ALTER TABLE price_cache ADD COLUMN gate TEXT")
+        # Rows written before the split have the booking site sitting in
+        # `airline`. Moving them is not cosmetic: an airline filter reading
+        # that column would otherwise offer 「Kupi.com」 as a carrier.
+        # The length guard keeps genuine IATA codes where they are — those
+        # come from the calendar endpoint, which supplies no `gate` at all,
+        # so a blanket move would destroy real carrier data.
+        conn.execute(
+            """
+            UPDATE price_cache SET gate = airline, airline = NULL
+            WHERE airline IS NOT NULL AND LENGTH(airline) <> 2
+            """
+        )
 
 
 @contextmanager

@@ -40,7 +40,7 @@ class TestLoading:
     def test_refresh_reports_rows_written_per_file(self, conn):
         client = FakeClient(PAYLOADS)
         written = refdata.refresh(conn, client=client)
-        assert written == {"countries": 3, "cities": 4, "airports": 8, "airlines": 3}
+        assert written == {"countries": 3, "cities": 4, "airports": 8, "airlines": 4}
 
     def test_refresh_is_idempotent(self, loaded):
         client = FakeClient(PAYLOADS)

@@ -87,6 +87,7 @@ def _varint_field(field: int, value: int) -> bytes:
 # that opens a plausible-looking but wrong search.
 _GF_LEG = 3
 _GF_DATE = 2
+_GF_AIRLINE = 6
 _GF_ORIGIN = 13
 _GF_DESTINATION = 14
 _GF_PASSENGER = 8
@@ -94,17 +95,46 @@ _GF_SEAT = 9
 _GF_TRIP = 19
 
 
-def _google_leg(leg: FlightLeg) -> bytes:
-    """One leg inside Google Flights' `tfs` protobuf."""
+def _google_leg(leg: FlightLeg, airlines: Sequence[str] = ()) -> bytes:
+    """One leg inside Google Flights' `tfs` protobuf.
+
+    The airline filter is a repeated IATA code **inside the leg**, not a
+    top-level field — read back out of the URL Google itself produced after
+    ticking 長榮 and 華航 in its own filter panel. Setting it on every leg is
+    what the UI does for multi-city, so we do the same.
+    """
+    body = _string_field(_GF_DATE, leg.depart_date.isoformat())
+    for code in airlines:
+        body += _string_field(_GF_AIRLINE, code)
     return (
-        _string_field(_GF_DATE, leg.depart_date.isoformat())
+        body
         + _message_field(_GF_ORIGIN, _string_field(2, leg.origin))
         + _message_field(_GF_DESTINATION, _string_field(2, leg.destination))
     )
 
 
+def normalise_airlines(codes: Sequence[str] | None) -> tuple[str, ...]:
+    """Two-letter IATA codes, upper-cased, de-duplicated, order preserved.
+
+    Anything else is dropped rather than passed through: a junk code in the
+    filter makes Google return an empty result list, which reads exactly like
+    「這條航線那天沒有班機」 — the one message this whole change exists to stop
+    being wrong.
+    """
+    seen: list[str] = []
+    for raw in codes or ():
+        code = (raw or "").strip().upper()
+        if len(code) == 2 and code.isalnum() and code not in seen:
+            seen.append(code)
+    return tuple(seen)
+
+
 def google_flights_url(
-    legs: Sequence[FlightLeg], *, passengers: int = 1, cabin: str = "economy"
+    legs: Sequence[FlightLeg],
+    *,
+    passengers: int = 1,
+    cabin: str = "economy",
+    airlines: Sequence[str] = (),
 ) -> str:
     """Build a Google Flights search URL that opens on this exact itinerary.
 
@@ -113,7 +143,8 @@ def google_flights_url(
     opening the wrong search the fix is to re-derive the field numbers in a
     browser rather than to guess — see `docs/verification.md`.
     """
-    body = b"".join(_message_field(_GF_LEG, _google_leg(leg)) for leg in legs)
+    picked = normalise_airlines(airlines)
+    body = b"".join(_message_field(_GF_LEG, _google_leg(leg, picked)) for leg in legs)
     body += b"".join(_varint_field(_GF_PASSENGER, 1) for _ in range(max(1, passengers)))
     body += _varint_field(_GF_SEAT, CABIN_CODES.get(cabin, 1))
     body += _varint_field(_GF_TRIP, _trip_type(legs))
@@ -162,12 +193,25 @@ def aviasales_url(
 # Assembly
 # --------------------------------------------------------------------------
 
+# 只有 Google Flights 的航空公司篩選是實測過的(在瀏覽器裡勾選再讀回 URL)。
+# Kayak 擋機器人、Aviasales 的參數沒驗過,所以那兩個連結刻意不帶篩選 ——
+# 送出一個沒驗證過的篩選參數,失敗的樣子是「查無班機」,跟真的沒有班機分不開。
+AIRLINE_FILTER_TARGETS = ("google_flights",)
+
+
 def links_for_single_ticket(
-    combo: Combo, *, passengers: int = 1, cabin: str = "economy", marker: str | None = None
+    combo: Combo,
+    *,
+    passengers: int = 1,
+    cabin: str = "economy",
+    marker: str | None = None,
+    airlines: Sequence[str] = (),
 ) -> dict[str, str]:
     """Links that price the whole itinerary as one ticket."""
     return {
-        "google_flights": google_flights_url(combo.legs, passengers=passengers, cabin=cabin),
+        "google_flights": google_flights_url(
+            combo.legs, passengers=passengers, cabin=cabin, airlines=airlines
+        ),
         "kayak": kayak_url(combo.legs, passengers=passengers, cabin=cabin),
         "aviasales": aviasales_url(combo.legs, passengers=passengers, marker=marker),
     }
@@ -179,6 +223,7 @@ def links_for_split_tickets(
     passengers: int = 1,
     cabin: str = "economy",
     marker: str | None = None,
+    airlines: Sequence[str] = (),
 ) -> list[dict[str, str]]:
     """One set of links per leg — this is the 拼票 買法.
 
@@ -190,7 +235,9 @@ def links_for_split_tickets(
         {
             "leg": f"{leg.origin}→{leg.destination}",
             "date": leg.depart_date.isoformat(),
-            "google_flights": google_flights_url([leg], passengers=passengers, cabin=cabin),
+            "google_flights": google_flights_url(
+                [leg], passengers=passengers, cabin=cabin, airlines=airlines
+            ),
             "kayak": kayak_url([leg], passengers=passengers, cabin=cabin),
             "aviasales": aviasales_url([leg], passengers=passengers, marker=marker),
         }

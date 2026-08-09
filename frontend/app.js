@@ -17,6 +17,10 @@ const state = {
   // 沒有即時報價來源時,「查即時價」按鈕只會回一句「未接即時報價來源」——
   // 白費一次點擊,而且旁邊的連結早就在做同一件事。
   hasLivePricing: false,
+  // 想搭的航空公司(IATA)。兩個模式共用一份,因為使用者對「我只搭長榮」
+  // 這件事的認知不會因為換一個分頁就改變。
+  airlines: new Set(),
+  airlineNames: new Map(),
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -312,17 +316,9 @@ function priceBlock(combo, currency) {
     // 「這天查無資料」會被讀成「那天沒有飛機」。實際上多半是這條航線只有少數
     // 幾天被人搜過 —— 那些日子就在同一批抓回來的資料裡,講出來就變成下一步。
     for (const leg of missing) {
-      const alts = leg.alternatives || [];
-      if (!alts.length) continue;
-      const line = el("div", "alts");
-      line.append(el("span", "alts__label", `${leg.origin}→${leg.destination} 附近有價的日子`));
-      for (const alt of alts) {
-        line.append(
-          el("span", "alts__day",
-             `${alt.date.slice(5)} ${money(alt.price, currency)}(${alt.days_away > 0 ? "+" : ""}${alt.days_away}天)`)
-        );
-      }
-      box.append(line);
+      box.append(
+        gapDetail(leg.gap, leg.alternatives, currency, `${leg.origin}→${leg.destination}`)
+      );
     }
   }
 
@@ -338,6 +334,47 @@ function priceBlock(combo, currency) {
           : `比單城來回貴 ${money(-delta, currency)}`
       )
     );
+  }
+  return box;
+}
+
+/** 一個沒有價格的航段,為什麼沒有 —— 以及下一步是什麼。
+ *
+ *  四種情況在畫面上長得都一樣(一個空格),但要做的事完全不同:沒查過要重跑、
+ *  整個月都沒有要換機場、只有遠處有價要整趟挪。全部併成「查無資料」等於把
+ *  使用者能做的事一起藏起來。同城替代放在最前面,因為它連日期都不用改。 */
+function gapDetail(gap, alternatives, currency, label) {
+  const box = el("div");
+  if (!gap) return box;
+
+  for (const alt of gap.same_city || []) {
+    const line = el("div", "alts alts--strong");
+    line.append(el("span", "alts__label", "同城的其他機場那天有票"));
+    line.append(
+      el("span", "alts__day",
+         `${alt.origin}→${alt.destination} ${alt.date.slice(5)} ${money(alt.price, currency)}`)
+    );
+    box.append(line);
+  }
+
+  const days = alternatives || [];
+  if (days.length) {
+    const line = el("div", "alts");
+    line.append(el("span", "alts__label", `${label} ${gap.text}`));
+    for (const day of days) {
+      line.append(
+        el("span", "alts__day",
+           `${day.date.slice(5)} ${money(day.price, currency)}` +
+           `(${day.days_away > 0 ? "+" : ""}${day.days_away}天)`)
+      );
+    }
+    box.append(line);
+  } else {
+    // 沒有日子可以推薦的時候,那句理由就是全部的內容 —— 而它正是使用者
+    // 看著一格空白、什麼都不知道的那個情況。
+    const line = el("div", "alts");
+    line.append(el("span", "alts__label", `${label} ${gap.text}`));
+    box.append(line);
   }
   return box;
 }
@@ -536,6 +573,7 @@ function payload() {
       state.stops.length > 1 ? state.stops.slice(0, -1).map((s) => s.hop) : null,
     passengers: Number($("#passengers").value) || 1,
     cabin: $("#cabin").value,
+    airlines: [...state.airlines],
   };
 }
 
@@ -794,6 +832,87 @@ function wirePasswordPanel() {
   });
 }
 
+/* -------------------------------------------------------------- airlines */
+
+/* 這個選單是**全球清單**,不是「這條航線有誰飛」。免費的航線資料表薄到不能當
+ * 選單:台北出發的日本線裡還留著已經停業的復興(GE)與捷星亞洲(3K),卻沒有
+ * 星宇(JX)跟台灣虎航(IT)—— 一個把 JX 藏起來、把 GE 端出來的選單,
+ * 比沒有選單更糟。所以選單不受航線限制,而選的結果只跟著連結出去。 */
+
+function airlineChip(airline) {
+  const chip = el("button", "chip", airline.name);
+  chip.type = "button";
+  chip.title = airline.code;
+  state.airlineNames.set(airline.code, airline.name);
+  const paint = () =>
+    chip.setAttribute("aria-pressed", String(state.airlines.has(airline.code)));
+  chip.addEventListener("click", () => {
+    if (state.airlines.has(airline.code)) state.airlines.delete(airline.code);
+    else state.airlines.add(airline.code);
+    paint();
+    renderAirlineCount();
+    // 已經有結果在畫面上時,連結是舊的 —— 講出來,不要讓使用者以為改完就生效了。
+    if ($("#results").hidden === false || $("#reverse-results").hidden === false) {
+      showNotice(
+        "航空公司改了",
+        "已經在畫面上的連結還是舊的。再按一次「找組合」或「組票」就會套用。",
+        "info",
+        "airlines-restale"
+      );
+    }
+  });
+  paint();
+  return chip;
+}
+
+function renderAirlineCount() {
+  const picked = [...state.airlines];
+  $("#airline-count").textContent = picked.length
+    ? picked.map((code) => state.airlineNames.get(code) || code).join("、")
+    : "不限";
+  // 已選的也要在搜尋結果那排跟著亮起來,否則同一家會出現兩個不同狀態。
+  for (const chip of document.querySelectorAll("#airline-chips .chip, #airline-found .chip")) {
+    chip.setAttribute("aria-pressed", String(state.airlines.has(chip.title)));
+  }
+}
+
+async function wireAirlinePanel() {
+  let body;
+  try {
+    body = await api("/api/ref/airlines?limit=14");
+  } catch {
+    return;  // 純加值:清單拿不到,站台照常運作,只是不能挑航空公司
+  }
+  const chips = $("#airline-chips");
+  chips.replaceChildren();
+  for (const airline of body.airlines) chips.append(airlineChip(airline));
+
+  let timer = null;
+  $("#airline-search").addEventListener("input", (event) => {
+    const q = event.target.value.trim();
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const found = $("#airline-found");
+      if (!q) {
+        found.replaceChildren();
+        return;
+      }
+      try {
+        const result = await api(`/api/ref/airlines?limit=12&q=${encodeURIComponent(q)}`);
+        found.replaceChildren();
+        if (!result.airlines.length) {
+          found.append(el("span", "alts__label", `找不到「${q}」`));
+          return;
+        }
+        for (const airline of result.airlines) found.append(airlineChip(airline));
+      } catch {
+        found.replaceChildren();
+      }
+    }, 250);
+  });
+  renderAirlineCount();
+}
+
 function newStop(country) {
   return { country, selected: new Set(), nights_min: 3, nights_max: 4, hop: "surface", label: "" };
 }
@@ -824,6 +943,7 @@ async function init() {
 
   wireKeyPanel();
   wirePasswordPanel();
+  wireAirlinePanel();
   await migrateLegacyKeys();
   await renderKeyState();
   await renderPlan();
@@ -950,17 +1070,7 @@ function ticketRow(ticket, currency) {
   // 「查無資料」單獨擺在那裡是條死路。這條航線通常還是有幾天有價的 ——
   // 抓價本來就是整月一起抓的,那些日子就在手上,講出來就變成下一步。
   for (const alt of ticket.pricing?.alternatives || []) {
-    if (!alt.days.length) continue;
-    const line_ = el("div", "alts");
-    line_.append(el("span", "alts__label", `${alt.leg} 附近有價的日子`));
-    for (const day of alt.days) {
-      line_.append(
-        el("span", "alts__day",
-           `${day.date.slice(5)} ${money(day.price, currency)}` +
-           `(${day.days_away > 0 ? "+" : ""}${day.days_away}天)`)
-      );
-    }
-    body.append(line_);
+    body.append(gapDetail(alt.gap, alt.alternatives, currency, alt.leg));
   }
 
   const links = el("div", "ticket__links");
@@ -1039,6 +1149,7 @@ async function runReverse(event) {
         try_both_orders: false,
         passengers: Number($("#rev-passengers").value) || 1,
         cabin: $("#rev-cabin").value,
+        airlines: [...state.airlines],
       }),
     });
 

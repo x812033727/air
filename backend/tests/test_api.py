@@ -400,3 +400,120 @@ class TestStoredKeys:
         assert config["cached_prices"] is True
         assert config["key_source"] == "saved"
         client.delete("/api/keys")
+
+
+class TestAirlinePicker:
+    """使用者選了航空公司之後,唯一會變的是連結,排名一個字都不動。
+
+    這條線刻意畫得死:排名用的 month-matrix 根本沒有航空公司欄位,拿它去篩會
+    篩掉航線卻篩不掉價格 —— 顯示的數字根本不是那家的,那比沒有篩選更會誤導。
+    """
+
+    def test_the_picker_list_leads_with_carriers_a_taipei_traveller_would_name(self, client):
+        """千百家航空公司照字母排,長榮會在很後面。台北出發的人要找的那幾家
+        排在前面,選單才有人用得下去。"""
+        codes = [a["code"] for a in client.get("/api/ref/airlines").json()["airlines"]]
+        assert set(codes[:3]) == {"BR", "IT", "MM"}
+        assert codes.index("AA") > codes.index("BR")
+
+    def test_the_list_can_be_searched(self, client):
+        body = client.get("/api/ref/airlines?q=EVA").json()
+        assert any(a["code"] == "BR" for a in body["airlines"])
+
+    def test_picking_an_airline_only_changes_the_google_link(self, client, priced):
+        plain = client.post("/api/search", json=JAPAN_SEARCH).json()["results"][0]
+        picked = client.post(
+            "/api/search", json={**JAPAN_SEARCH, "airlines": ["BR", "CI"]}
+        ).json()["results"][0]
+
+        assert picked["split_total"] == plain["split_total"]
+        assert picked["links"]["single_ticket"]["kayak"] == plain["links"]["single_ticket"]["kayak"]
+        assert (
+            picked["links"]["single_ticket"]["google_flights"]
+            != plain["links"]["single_ticket"]["google_flights"]
+        )
+
+    def test_the_filter_reaches_the_per_leg_links_too(self, client, priced):
+        """拼票是逐段各買一張。篩選只套到「整趟一張票」那條連結,
+        點分段連結的人就會看到自己沒選的航空公司。"""
+        import base64
+
+        picked = client.post(
+            "/api/search", json={**JAPAN_SEARCH, "airlines": ["BR"]}
+        ).json()["results"][0]
+        for leg in picked["links"]["split"]:
+            tfs = leg["google_flights"].split("tfs=")[1].split("&")[0]
+            assert b"BR" in base64.urlsafe_b64decode(tfs + "=" * (-len(tfs) % 4))
+
+
+class TestAGapExplainsItself:
+    def test_a_missing_leg_says_which_of_the_four_situations_it_is(self, client, priced):
+        body = client.post("/api/search", json={**JAPAN_SEARCH, "home": ["TPE", "TSA"]}).json()
+        legs = [
+            leg
+            for combo in body["unpriceable"]
+            for leg in combo["legs"]
+            if leg["status"] != "ok"
+        ]
+        assert legs, "這組固定資料本來就留了查無資料的航段"
+        for leg in legs:
+            assert leg["gap"]["reason"] in {
+                "not_fetched", "route_empty", "nearby", "far_only"
+            }
+            assert leg["gap"]["text"]
+
+    def test_a_route_month_that_came_back_empty_is_not_called_never_asked(
+        self, client, priced
+    ):
+        """ITM→TSA 在固定資料裡是「查過、零筆」。說成「還沒查過」會叫使用者
+        去按一個按鈕,而那個按鈕做完之後畫面完全不會變。"""
+        body = client.post("/api/search", json={**JAPAN_SEARCH, "home": ["TPE", "TSA"]}).json()
+        gaps_ = [
+            leg["gap"]
+            for combo in body["unpriceable"]
+            for leg in combo["legs"]
+            if leg["origin"] == "ITM" and leg["destination"] == "TSA"
+        ]
+        assert gaps_
+        assert all(g["reason"] != "not_fetched" for g in gaps_)
+
+
+REVERSE_TRIPS = {
+    "home": ["TPE"],
+    "first": {"codes": ["TYO"], "depart": "2026-10-05", "back": "2026-10-10"},
+    "second": {"codes": ["OSA"], "depart": "2026-12-06", "back": "2026-12-13"},
+    "try_both_orders": False,
+    "warm": False,
+}
+
+
+class TestReverseModeExplainsItsGapsToo:
+    """「附近有價的日子」第一次只做進了單趟搜尋,倒買法漏掉,使用者看到的就是
+    一句沒有下文的「查無資料」。序列化因此收在同一個地方。"""
+
+    def test_an_unpriced_leg_carries_a_reason(self, client, priced):
+        body = client.post("/api/reverse", json=REVERSE_TRIPS).json()
+        alternatives = [
+            alt
+            for plan in body["groups"][0]["plans"]
+            for ticket in plan["tickets"]
+            if ticket.get("pricing")
+            for alt in ticket["pricing"]["alternatives"]
+        ]
+        assert alternatives
+        for alt in alternatives:
+            assert alt["gap"]["reason"] in {
+                "not_fetched", "route_empty", "nearby", "far_only"
+            }
+            assert alt["leg"]
+
+    def test_the_airline_choice_reaches_the_reverse_tickets(self, client, priced):
+        import base64
+
+        body = client.post(
+            "/api/reverse", json={**REVERSE_TRIPS, "airlines": ["BR"]}
+        ).json()
+        for plan in body["groups"][0]["plans"]:
+            for ticket in plan["tickets"]:
+                tfs = ticket["links"]["google_flights"].split("tfs=")[1].split("&")[0]
+                assert b"BR" in base64.urlsafe_b64decode(tfs + "=" * (-len(tfs) % 4))

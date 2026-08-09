@@ -67,7 +67,11 @@ COUNTRIES_PAYLOAD = [
     {"code": "AB", "name_translations": {"en": "Abkhazia"}, "currency": "RUB"},
 ]
 
+# American Airlines 在這裡不是湊數的:它的名字排在其他三家之前,所以
+# 「台灣旅客會想到的航空公司排在最前面」這件事只有在有它的時候才測得出來 ——
+# 純字母排序會把它排到第一個。
 AIRLINES_PAYLOAD = [
+    {"code": "AA", "name_translations": {"en": "American Airlines"}},
     {"code": "BR", "name_translations": {"en": "EVA Air"}},
     {"code": "IT", "name_translations": {"en": "Tigerair Taiwan"}},
     {"code": "MM", "name_translations": {"en": "Peach"}},

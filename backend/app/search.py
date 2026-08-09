@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Sequence
 
-from app import refdata
+from app import gaps, refdata
 from app.combos import (
     Combo,
     Link,
@@ -64,6 +64,7 @@ def build_request(
     passengers: int = 1,
     cabin: str = "economy",
     currency: str | None = None,
+    airlines: Sequence[str] | None = None,
 ) -> SearchRequest:
     """Resolve the user's city/airport picks into a concrete search request."""
     home = _waypoint(conn, home_codes, label=None, nights=(0, 0))
@@ -85,6 +86,7 @@ def build_request(
         passengers=passengers,
         cabin=cabin,
         currency=currency or settings.default_currency,
+        airlines=deeplinks.normalise_airlines(airlines),
     )
 
 
@@ -227,6 +229,11 @@ def run(
 
     lookup = cached.load_lookup(conn, pairs, request.currency)
     fetched = cached.fetched_routes(conn, request.currency)
+    # 同城機場查一次就好。一個空價格問一次,幾百個空價格就是幾百次查詢,
+    # 換回來的還是同一張常數大小的對照表。
+    siblings = refdata.siblings_by_airport(
+        conn, {code for pair in pairs for code in pair}
+    )
     pricings = [cached.price_combo(combo, lookup, fetched) for combo in combos]
     priced, unpriced = cached.rank(pricings)
 
@@ -256,15 +263,18 @@ def run(
             "shown": min(len(ranked), limit),
         },
         "results": [
-            _serialise(p, request, cheapest_baseline, marker, conn) for p in ranked[:limit]
+            _serialise(p, request, cheapest_baseline, marker, conn, fetched, siblings)
+            for p in ranked[:limit]
         ],
         "baselines": [
-            _serialise(p, request, None, marker, conn) for p in baselines[:BASELINE_LIMIT]
+            _serialise(p, request, None, marker, conn, fetched, siblings)
+            for p in baselines[:BASELINE_LIMIT]
         ],
         # A sample, plus the full count above. Enough to show what a gap looks
         # like without shipping thousands of rows nobody will read.
         "unpriceable": [
-            _serialise(p, request, None, marker, conn) for p in unpriced[:UNPRICEABLE_SAMPLE]
+            _serialise(p, request, None, marker, conn, fetched, siblings)
+            for p in unpriced[:UNPRICEABLE_SAMPLE]
         ],
         "warnings": warnings,
     }
@@ -276,6 +286,8 @@ def _serialise(
     baseline_total: float | None,
     marker: str = "",
     conn: sqlite3.Connection | None = None,
+    fetched: dict[tuple[str, str, str], int] | None = None,
+    siblings: dict[str, tuple[str, ...]] | None = None,
 ) -> dict[str, Any]:
     combo = pricing.combo
     total = pricing.total
@@ -303,12 +315,17 @@ def _serialise(
                 "price": leg.price,
                 "transfers": leg.point.transfers if leg.point else None,
                 "airline": leg.point.airline if leg.point else None,
+                "gate": leg.point.gate if leg.point else None,
                 "fetched_at": leg.point.fetched_at.isoformat() if leg.point else None,
                 "age_hours": round(leg.point.age_hours, 1) if leg.point else None,
                 # 「這天查無資料」單看會被讀成「那天沒有飛機」。實際上通常是這條
                 # 航線只有少數幾天被人搜過,而抓價本來就是整月一起抓的 ——
                 # 那幾天就在手上,拿出來就能把死路變成下一步。
-                "alternatives": _alternatives(conn, leg, request.currency),
+                **gaps.serialise(
+                    _gap_for(conn, leg.leg, request, fetched, siblings)
+                    if conn is not None and leg.status != "ok"
+                    else None
+                ),
             }
             for leg in pricing.legs
         ],
@@ -319,31 +336,41 @@ def _serialise(
         "risks": risks(combo, request),
         "links": {
             "single_ticket": deeplinks.links_for_single_ticket(
-                combo, passengers=request.passengers, cabin=request.cabin, marker=marker
+                combo,
+                passengers=request.passengers,
+                cabin=request.cabin,
+                marker=marker,
+                airlines=request.airlines,
             ),
             "split": deeplinks.links_for_split_tickets(
-                combo, passengers=request.passengers, cabin=request.cabin, marker=marker
+                combo,
+                passengers=request.passengers,
+                cabin=request.cabin,
+                marker=marker,
+                airlines=request.airlines,
             ),
         },
     }
 
 
-def _alternatives(
-    conn: sqlite3.Connection | None, leg, currency: str
-) -> list[dict[str, Any]]:
-    if conn is None or leg.status == "ok":
-        return []
-    nearby = cached.nearest_priced_dates(
-        conn, leg.leg.origin, leg.leg.destination, leg.leg.depart_date, currency=currency
+def _gap_for(
+    conn: sqlite3.Connection,
+    leg,
+    request: SearchRequest,
+    fetched: dict[tuple[str, str, str], int] | None,
+    siblings: dict[str, tuple[str, ...]] | None,
+) -> cached.Gap:
+    siblings = siblings or {}
+    return cached.explain_gap(
+        conn,
+        leg.origin,
+        leg.destination,
+        leg.depart_date,
+        currency=request.currency,
+        fetched=fetched,
+        sibling_origins=siblings.get(leg.origin, ()),
+        sibling_destinations=siblings.get(leg.destination, ()),
     )
-    return [
-        {
-            "date": point.depart_date.isoformat(),
-            "price": point.price,
-            "days_away": (point.depart_date - leg.leg.depart_date).days,
-        }
-        for point in nearby
-    ]
 
 
 def risks(combo: Combo, request: SearchRequest) -> list[str]:

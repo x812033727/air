@@ -54,6 +54,10 @@ class PricePoint:
     flight_number: str | None
     found_at: str | None
     fetched_at: datetime
+    # 訂票網站,不是航空公司。month-matrix 只給得出這個,所以那個端點的
+    # `airline` 一定是 None —— 把 gate 塞進 airline 會讓「Kupi.com」變成一家
+    # 航空公司,而航空公司篩選會照單全收。
+    gate: str | None = None
 
     @property
     def age_hours(self) -> float:
@@ -383,7 +387,12 @@ def parse_month_payload(
                     price=float(price),
                     currency=currency,
                     transfers=entry.get("number_of_changes"),
-                    airline=entry.get("gate") or entry.get("airline"),
+                    # month-matrix has no carrier field at all. `gate` is the
+                    # booking site — measured values include "Kupi.com",
+                    # "Aviakassa", "City.Travel". Reading it as the airline is
+                    # how a fare gets attributed to a company that doesn't fly.
+                    airline=entry.get("airline"),
+                    gate=entry.get("gate"),
                     flight_number=None,
                     found_at=entry.get("found_at"),
                     fetched_at=fetched_at,
@@ -407,6 +416,7 @@ def parse_month_payload(
                     currency=currency,
                     transfers=entry.get("transfers") or entry.get("number_of_changes"),
                     airline=entry.get("airline"),
+                    gate=entry.get("gate"),
                     flight_number=str(entry.get("flight_number") or "") or None,
                     found_at=entry.get("found_at"),
                     fetched_at=fetched_at,
@@ -460,12 +470,13 @@ def _store(
         """
         INSERT INTO price_cache
             (origin, destination, depart_date, currency, price, transfers, airline,
-             flight_number, found_at, fetched_at, expires_at, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             gate, flight_number, found_at, fetched_at, expires_at, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(origin, destination, depart_date, currency) DO UPDATE SET
             price = excluded.price,
             transfers = excluded.transfers,
             airline = excluded.airline,
+            gate = excluded.gate,
             flight_number = excluded.flight_number,
             found_at = excluded.found_at,
             fetched_at = excluded.fetched_at,
@@ -480,6 +491,7 @@ def _store(
                 point.price,
                 point.transfers,
                 point.airline,
+                point.gate,
                 point.flight_number,
                 point.found_at,
                 point.fetched_at.isoformat(),
@@ -538,22 +550,29 @@ def load_lookup(
 
     lookup: dict[tuple[str, str, date], PricePoint] = {}
     for row in rows:
-        depart = _parse_date(row["depart_date"])
-        if depart is None:
-            continue
-        lookup[(row["origin"], row["destination"], depart)] = PricePoint(
-            origin=row["origin"],
-            destination=row["destination"],
-            depart_date=depart,
-            price=row["price"],
-            currency=row["currency"],
-            transfers=row["transfers"],
-            airline=row["airline"],
-            flight_number=row["flight_number"],
-            found_at=row["found_at"],
-            fetched_at=datetime.fromisoformat(row["fetched_at"]),
-        )
+        point = _point_from_row(row)
+        if point is not None:
+            lookup[(point.origin, point.destination, point.depart_date)] = point
     return lookup
+
+
+def _point_from_row(row: sqlite3.Row) -> PricePoint | None:
+    depart = _parse_date(row["depart_date"])
+    if depart is None:
+        return None
+    return PricePoint(
+        origin=row["origin"],
+        destination=row["destination"],
+        depart_date=depart,
+        price=row["price"],
+        currency=row["currency"],
+        transfers=row["transfers"],
+        airline=row["airline"],
+        gate=row["gate"],
+        flight_number=row["flight_number"],
+        found_at=row["found_at"],
+        fetched_at=datetime.fromisoformat(row["fetched_at"]),
+    )
 
 
 def nearest_priced_dates(
@@ -564,7 +583,8 @@ def nearest_priced_dates(
     *,
     currency: str | None = None,
     limit: int = 3,
-    window_days: int = 14,
+    window_days: int | None = 14,
+    month: str | None = None,
 ) -> list[PricePoint]:
     """這條航線上離 `target` 最近、而且有價的日子。
 
@@ -572,40 +592,147 @@ def nearest_priced_dates(
     少數幾天被人搜過 —— 實測 ITM→TPE 在 2026-12 只有 3 天有價,而同城的
     KIX→TPE 有 28 天。抓價本來就是整月一起抓的,所以那幾天就在手上,把它拿出來
     就能把死路變成下一步。
+
+    `window_days=None` 取消距離限制,`month` 則把答案綁在某一個月裡。兩個一起用
+    才是安全的:快取是跨搜尋共用的,上一次查 10 月留下的資料還躺在裡面,不設月份
+    就會拿 10 月的票去回答 12 月的問題 —— 而「離得比較遠」跟「那是另一個月的票」
+    是兩件事,前者挪三天就好,後者要整趟旅行重排。
     """
     currency = currency or settings.default_currency
-    rows = conn.execute(
-        """
+    sql = """
         SELECT * FROM price_cache
         WHERE origin = ? AND destination = ? AND currency = ?
-          AND ABS(julianday(depart_date) - julianday(?)) <= ?
-        ORDER BY ABS(julianday(depart_date) - julianday(?)) ASC
-        LIMIT ?
-        """,
-        (origin, destination, currency, target.isoformat(), window_days,
-         target.isoformat(), limit),
-    ).fetchall()
+    """
+    args: list[Any] = [origin, destination, currency]
+    if window_days is not None:
+        sql += " AND ABS(julianday(depart_date) - julianday(?)) <= ?"
+        args += [target.isoformat(), window_days]
+    if month is not None:
+        sql += " AND substr(depart_date, 1, 7) = ?"
+        args.append(month)
+    sql += " ORDER BY ABS(julianday(depart_date) - julianday(?)) ASC LIMIT ?"
+    args += [target.isoformat(), limit]
 
-    points = []
-    for row in rows:
-        depart = _parse_date(row["depart_date"])
-        if depart is None:
-            continue
-        points.append(
-            PricePoint(
-                origin=row["origin"],
-                destination=row["destination"],
-                depart_date=depart,
-                price=row["price"],
-                currency=row["currency"],
-                transfers=row["transfers"],
-                airline=row["airline"],
-                flight_number=row["flight_number"],
-                found_at=row["found_at"],
-                fetched_at=datetime.fromisoformat(row["fetched_at"]),
-            )
-        )
-    return points
+    rows = conn.execute(sql, args).fetchall()
+    return [point for point in map(_point_from_row, rows) if point is not None]
+
+
+GapReason = Literal["not_fetched", "route_empty", "nearby", "far_only"]
+
+
+@dataclass(frozen=True)
+class Gap:
+    """為什麼這一段沒有價格 —— 分成使用者要採取不同行動的四種情況。
+
+    這四種在畫面上長得一樣(一個空格),但下一步完全不同:沒查過要按重查、
+    整個月都沒有要換航線或機場、只有遠處有價要改日期。全部併成「查無資料」等於
+    把使用者能做的事一起藏起來,而那正是他回報「還是沒拿到價格」的原因。
+    """
+
+    origin: str
+    destination: str
+    target: date
+    reason: GapReason
+    month: str
+    month_rows: int
+    nearby: tuple[PricePoint, ...] = ()
+    same_city: tuple[PricePoint, ...] = ()
+
+
+def explain_gap(
+    conn: sqlite3.Connection,
+    origin: str,
+    destination: str,
+    target: date,
+    *,
+    currency: str | None = None,
+    fetched: dict[tuple[str, str, str], int] | None = None,
+    sibling_origins: Sequence[str] = (),
+    sibling_destinations: Sequence[str] = (),
+) -> Gap:
+    """把一個空價格變成一句能行動的話。
+
+    `sibling_*` 是同城的其他機場。同城替代是這裡最有價值的一條出路,因為它連
+    日期都不用改:實測 2026-12 的大阪,ITM→TPE 只有 3 天有價,KIX→TPE 有 28 天。
+    那些資料早就在同一次搜尋裡抓回來了(城市本來就展開成多個機場),不必多花
+    一次呼叫。
+    """
+    currency = currency or settings.default_currency
+    month = target.strftime("%Y-%m")
+
+    if fetched is None:
+        row = conn.execute(
+            """
+            SELECT row_count FROM route_fetch
+            WHERE origin = ? AND destination = ? AND month = ? AND currency = ?
+            """,
+            (origin, destination, month, currency),
+        ).fetchone()
+        month_rows = int(row["row_count"]) if row else -1
+    else:
+        month_rows = fetched.get((origin, destination, month), -1)
+
+    same_city = _same_city_prices(
+        conn, origin, destination, target,
+        currency=currency,
+        sibling_origins=sibling_origins,
+        sibling_destinations=sibling_destinations,
+    )
+
+    if month_rows < 0:
+        return Gap(origin, destination, target, "not_fetched", month, 0,
+                   same_city=same_city)
+
+    nearby = tuple(nearest_priced_dates(
+        conn, origin, destination, target, currency=currency
+    ))
+    if nearby:
+        return Gap(origin, destination, target, "nearby", month, month_rows,
+                   nearby=nearby, same_city=same_city)
+
+    # 近處沒有,不代表這個月都沒有。放寬距離再問一次,但**綁在同一個月裡** ——
+    # 快取跨搜尋共用,不綁月份就會拿上次查 10 月留下的票去回答 12 月的問題,
+    # 然後配上一句寫著「2026-12」的說明,那是直接說錯話。
+    far = tuple(nearest_priced_dates(
+        conn, origin, destination, target,
+        currency=currency, window_days=None, month=month,
+    ))
+    if far:
+        return Gap(origin, destination, target, "far_only", month, month_rows,
+                   nearby=far, same_city=same_city)
+    return Gap(origin, destination, target, "route_empty", month, month_rows,
+               same_city=same_city)
+
+
+def _same_city_prices(
+    conn: sqlite3.Connection,
+    origin: str,
+    destination: str,
+    target: date,
+    *,
+    currency: str,
+    sibling_origins: Sequence[str],
+    sibling_destinations: Sequence[str],
+) -> tuple[PricePoint, ...]:
+    """同一天、同城不同機場、有價的替代航段。"""
+    pairs = [(code, destination) for code in sibling_origins if code != origin]
+    pairs += [(origin, code) for code in sibling_destinations if code != destination]
+    if not pairs:
+        return ()
+
+    clauses = " OR ".join("(origin = ? AND destination = ?)" for _ in pairs)
+    args: list[Any] = [currency, target.isoformat()]
+    for pair in pairs:
+        args.extend(pair)
+    rows = conn.execute(
+        f"""
+        SELECT * FROM price_cache
+        WHERE currency = ? AND depart_date = ? AND ({clauses})
+        ORDER BY price ASC
+        """,
+        args,
+    ).fetchall()
+    return tuple(p for p in map(_point_from_row, rows) if p is not None)
 
 
 def fetched_routes(
