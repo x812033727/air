@@ -628,6 +628,10 @@ def _reference_legs(plan, lookup, fetched, conn, siblings, nonstop=False) -> lis
                 "date": leg.depart_date.isoformat(),
                 "price": point.price if point else None,
                 "age_hours": round(point.age_hours, 1) if point else None,
+                # 誰飛的。month-matrix 給不出來,v3 給得出來,合併時誰便宜誰勝出 ——
+                # 所以這裡有值代表「這個價確實是這家的」,None 代表「不知道」,
+                # 而不是「沒有航空公司」。
+                "airline": point.airline if point else None,
             }
             if point is None and conn is not None:
                 row.update(

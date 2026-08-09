@@ -759,10 +759,17 @@ function referenceBlock(legs, currency) {
     row.append(el("span", "reference__code", leg.code || ""));
     row.append(el("span", "reference__leg",
       `${leg.origin}→${leg.destination} ${leg.date.slice(5)}`));
-    row.append(
-      el("span", leg.price != null ? "reference__price" : "reference__price reference__price--none",
-         leg.price != null ? money(leg.price, currency) : "查無資料")
-    );
+    const money_ = el("span",
+      leg.price != null ? "reference__price" : "reference__price reference__price--none",
+      leg.price != null ? money(leg.price, currency) : "查無資料");
+    row.append(money_);
+    // 把「是誰飛的」直接掛在數字旁邊。使用者選了長榮卻看到別家的價,
+    // 光靠一段說明是解釋不完的 —— 讓數字自己說它屬於誰。
+    if (leg.airline) {
+      const name = state.airlineNames.get(leg.airline) || leg.airline;
+      const mine = !state.airlines.size || state.airlines.has(leg.airline);
+      row.append(el("span", `reference__air${mine ? "" : " reference__air--other"}`, name));
+    }
     box.append(row);
     if (leg.price == null) {
       box.append(gapDetail(leg.gap, leg.alternatives, currency,
@@ -795,14 +802,12 @@ function totalCard(group, currency) {
         .map((code) => state.airlineNames.get(code) || code).join("、");
       card.append(
         el("div", "total__warn",
-           `你選了${names},但這個數字是不分航空公司的最低價。` +
-           `我們排名用的快取價根本沒有航空公司欄位,所以它不是${names}的價 —— ` +
-           `點右邊的連結才是。`)
+           `不分航空公司的最低價 —— 下面每一段都標了是誰飛的,不是${names}的就是灰的。`)
       );
     }
 
     card.append(el("div", "total__note",
-      "反向票要比這個便宜才值得買 —— 下面兩張票的真價請點連結查。"));
+      "反向票要比這個便宜才值得買。"));
   } else {
     card.append(el("div", "total__label", "算不出總價"));
     card.append(el("div", "total__price total__price--none",

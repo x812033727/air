@@ -581,3 +581,49 @@ class TestOnlyDirectFlights:
         )
         assert cached.load_lookup(conn, [("TPE", "KIX")])
         assert not cached.load_lookup(conn, [("TPE", "KIX")], nonstop=True)
+
+
+class TestMergingTheTwoSources:
+    """month-matrix 涵蓋廣但沒有航空公司欄位;v3 天數少但每列都有。
+
+    實測 TPE→NRT 2026-09 兩邊共同的 17 天**價格完全相同** —— 它們本來就是同一批
+    票價。所以合併的重點不是挑便宜的,是**同價時挑知道是誰飛的那一筆**。
+    """
+
+    def _pt(self, day, price, airline):
+        return PricePoint(
+            origin="TPE", destination="NRT", depart_date=day, price=price,
+            currency="TWD", transfers=0, airline=airline, flight_number=None,
+            found_at=None, fetched_at=utcnow(),
+        )
+
+    def test_same_price_prefers_the_row_that_names_the_airline(self):
+        day = date(2026, 9, 15)
+        merged = cached._merge_cheapest(
+            [self._pt(day, 3765.0, None)], [self._pt(day, 3765.0, "TR")]
+        )
+        assert [(p.price, p.airline) for p in merged] == [(3765.0, "TR")]
+
+    def test_a_cheaper_row_still_wins_even_without_an_airline(self):
+        """便宜才是主要判準。同價換名字是加值,不能反過來為了名字多付錢。"""
+        day = date(2026, 9, 15)
+        merged = cached._merge_cheapest(
+            [self._pt(day, 3000.0, None)], [self._pt(day, 3765.0, "TR")]
+        )
+        assert [(p.price, p.airline) for p in merged] == [(3000.0, None)]
+
+    def test_a_different_price_never_borrows_the_other_airline(self):
+        """價格不同代表是不同班機。把 A 的價配上 B 的航空公司,就是把票價
+        算到一家根本沒飛那個價的公司頭上。"""
+        day = date(2026, 9, 15)
+        merged = cached._merge_cheapest(
+            [self._pt(day, 3000.0, None)], [self._pt(day, 3765.0, "TR")]
+        )
+        assert merged[0].airline is None
+
+    def test_days_only_one_source_knows_are_all_kept(self):
+        merged = cached._merge_cheapest(
+            [self._pt(date(2026, 9, 1), 4000.0, None)],
+            [self._pt(date(2026, 9, 2), 4100.0, "GK")],
+        )
+        assert len(merged) == 2

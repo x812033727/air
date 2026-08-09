@@ -46,14 +46,24 @@ class FakeResponse:
 
 
 class ScriptedClient:
-    """Answers per (origin, destination); an Exception value is raised instead."""
+    """Answers per (origin, destination); an Exception value is raised instead.
 
-    def __init__(self, script):
+    每個 route-month 現在會打**兩支**端點:month-matrix(涵蓋廣、沒有航空公司)
+    與 v3 prices_for_dates(涵蓋窄、每列都有航空公司)。`calls` 只記主要來源,
+    因為那才是「這條航線抓過幾次」的意思;v3 的呼叫另外記在 `extra_calls`。
+    """
+
+    def __init__(self, script, v3=None):
         self.script = script
+        self.v3 = v3 or {}
         self.calls: list[tuple[str, str]] = []
+        self.extra_calls: list[tuple[str, str]] = []
 
     def get(self, url, params=None, headers=None):
         key = (params["origin"], params["destination"])
+        if "prices_for_dates" in url:
+            self.extra_calls.append(key)
+            return FakeResponse(self.v3.get(key, {"data": []}))
         self.calls.append(key)
         answer = self.script[key]
         if isinstance(answer, Exception):

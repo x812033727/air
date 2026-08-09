@@ -289,6 +289,28 @@ def _fetch_route_month(
         raise
 
     points = parse_month_payload(endpoint, payload, origin, destination, currency)
+
+    # 再問一次 v3。它涵蓋的天數比較少,但**每一列都帶航空公司** —— 而
+    # month-matrix 一列都沒有。合併時同一天取最便宜的,所以「這個價是誰飛的」
+    # 只有在 v3 那筆真的勝出時才會標上去,不會張冠李戴。
+    try:
+        points = _merge_cheapest(
+            points, fetch_v3_oneway(client, origin, destination, month, currency, token)
+        )
+    except Exception as exc:  # noqa: BLE001 — 純加值,失敗不該擋掉主要來源
+        # 但**要留下記錄**。第一版這裡是 `pass`,結果 v3 一列都沒進來而畫面上
+        # 完全看不出為什麼 —— 那正是這個專案到處在防的靜默失敗。
+        log_fetch(
+            conn,
+            source=SOURCE,
+            endpoint="prices_for_dates",
+            params={"origin": origin, "destination": destination, "month": month},
+            status_code=getattr(getattr(exc, "response", None), "status_code", None),
+            row_count=0,
+            duration_ms=0,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
     _store(conn, origin, destination, month, currency, points)
     log_fetch(
         conn,
@@ -300,6 +322,91 @@ def _fetch_route_month(
         duration_ms=int((time.perf_counter() - started) * 1000),
     )
     return len(points)
+
+
+V3_URL = f"{BASE_URL}/aviasales/v3/prices_for_dates"
+
+
+def fetch_v3_oneway(
+    client: httpx.Client, origin: str, destination: str, month: str,
+    currency: str, token: str,
+) -> list[PricePoint]:
+    """v3 的單程價 —— 它**帶航空公司代碼**,而 month-matrix 沒有。
+
+    這是「畫面上那個價不是長榮的價」唯一有解的地方。實測 `one_way=true` 時
+    每一列都有 `airline`(TPE→NRT 2026-09:17 列 17 天,17 列都有)。
+
+    ⚠️ 它**沒有**航空公司篩選參數 —— `airline` / `airlines` / `airline_iata` /
+    `carrier` 四種寫法回傳位元組完全相同,參數被忽略。而且它一天只給最便宜的
+    那一筆,所以那 17 天的航空公司清一色是廉航(TR/MM/GK/ZE/LJ/SL/D7/IT)。
+    也就是說:能做到的是**把價格標上是誰飛的**,不是「只算長榮的價」。
+
+    涵蓋範圍比 month-matrix 窄(17 天 vs 29 天),所以這是**補充**不是取代。
+    """
+    response = client.get(
+        V3_URL,
+        params={
+            "origin": origin,
+            "destination": destination,
+            "departure_at": month,
+            "one_way": "true",
+            "limit": 1000,
+            "sorting": "price",
+            "currency": currency.lower(),
+            "token": token,
+        },
+    )
+    response.raise_for_status()
+    fetched_at = utcnow()
+    points: list[PricePoint] = []
+    for entry in response.json().get("data") or []:
+        depart = _parse_date(entry.get("departure_at"))
+        price = entry.get("price")
+        if depart is None or price is None:
+            continue
+        points.append(
+            PricePoint(
+                origin=origin,
+                destination=destination,
+                depart_date=depart,
+                price=float(price),
+                currency=currency,
+                transfers=entry.get("transfers"),
+                airline=entry.get("airline"),
+                gate=None,
+                flight_number=str(entry.get("flight_number") or "") or None,
+                found_at=None,
+                fetched_at=fetched_at,
+            )
+        )
+    return points
+
+
+def _merge_cheapest(*groups: Sequence[PricePoint]) -> list[PricePoint]:
+    """同一天只留最便宜的那一筆;**同價時留知道航空公司的那一筆**。
+
+    同價的優先權不是細節,是這個合併唯一的用處。實測 TPE→NRT 2026-09 兩邊
+    共同的 17 天**價格一模一樣**(4290/4503/4199…全部相同)—— 它們本來就是
+    同一批票價,v3 只是天數少一點、外加一個 `airline` 欄位。所以嚴格用 `<` 比,
+    v3 永遠不會勝出,合併就白做了。
+
+    不能反過來「拿 month-matrix 的價貼上 v3 的航空公司」:價格不同的日子,
+    那兩筆是不同的班機,貼上去就是把價格算到一家沒有飛那個價的公司頭上。
+    只有同價才能換 —— 同價代表就是同一張票。
+    """
+    cheapest: dict[date, PricePoint] = {}
+    for group in groups:
+        for point in group:
+            existing = cheapest.get(point.depart_date)
+            if existing is None or point.price < existing.price:
+                cheapest[point.depart_date] = point
+            elif (
+                point.price == existing.price
+                and point.airline
+                and not existing.airline
+            ):
+                cheapest[point.depart_date] = point
+    return sorted(cheapest.values(), key=lambda p: p.depart_date)
 
 
 def _build_request(

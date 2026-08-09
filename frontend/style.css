@@ -767,14 +767,14 @@ a.chip { text-decoration: none; }
 
 .reference__row {
   display: grid;
-  grid-template-columns: 2.2rem minmax(0, 1fr) auto;
+  grid-template-columns: 5.5rem minmax(0, 1fr) auto auto;
   gap: 0.6rem;
   align-items: baseline;
   font-family: var(--mono);
   font-size: 0.76rem;
 }
 
-.reference__code { color: var(--airway); letter-spacing: 0.08em; }
+.reference__code { color: var(--airway); letter-spacing: 0; font-family: var(--han); }
 .reference__leg { color: var(--ink-soft); }
 
 .reference__price {
@@ -1044,3 +1044,14 @@ a.chip { text-decoration: none; }
   letter-spacing: 0;
   color: var(--ink);
 }
+
+/* 誰飛的。掛在數字旁邊,而不是寫成一段說明 —— 使用者選了長榮卻看到別家的價,
+   一段話解釋不完,讓數字自己說它屬於誰比較快。 */
+.reference__air {
+  font-family: var(--han);
+  font-size: 0.7rem;
+  color: var(--airway);
+  white-space: nowrap;
+}
+
+.reference__air--other { color: var(--ink-faint); text-decoration: line-through; }
