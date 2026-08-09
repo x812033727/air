@@ -1055,3 +1055,47 @@ a.chip { text-decoration: none; }
 }
 
 .reference__air--other { color: var(--ink-faint); text-decoration: line-through; }
+
+/* ---- 日期組合挑選 ------------------------------------------------------- */
+
+/* 後端本來就排了 12 種,畫面卻只顯示第一種 —— 等於幫使用者把日期決定了。 */
+.picker { margin-bottom: 1rem; display: grid; gap: 1px; }
+
+.picker__title {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+  margin-bottom: 0.35rem;
+}
+
+.picker__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.5rem 0.8rem;
+  align-items: baseline;
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+.picker__row:hover { border-color: var(--airway); }
+
+.picker__row--on {
+  border-color: var(--airway);
+  border-left-width: 3px;
+  background: var(--airway-soft);
+  color: var(--ink);
+}
+
+.picker__when { min-width: 0; }
+.picker__air { font-family: var(--han); font-size: 0.7rem; color: var(--airway); }
+.picker__air--other { color: var(--ink-faint); text-decoration: line-through; }
+.picker__price { font-variant-numeric: tabular-nums; color: var(--ink); }
+.picker__price--none { color: var(--boundary); }

@@ -819,6 +819,45 @@ function totalCard(group, currency) {
   return card;
 }
 
+/** 讓使用者自己挑日期組合。
+ *
+ *  後端本來就排了 12 種(機場 × 日期)的組合、照總價排序,但畫面只顯示第一種 ——
+ *  等於幫使用者決定了日期,而他要的是「有哪幾天可以選」。
+ *
+ *  ⚠️ 挑不掉的是航空公司:上游一天只給**最便宜的那一筆**票價(五種參數寫法都試過,
+ *  17 列永遠對 17 天,一天一筆),而最便宜的幾乎都是廉航 —— TPE→NRT 九月回來的是
+ *  TR/MM/GK/ZE/LJ,一天都沒有長榮。所以這裡列得出「哪幾天有票、誰飛的」,
+ *  列不出「長榮有票的日子」。不符合你選的航空公司的,標出來但不藏起來 ——
+ *  藏起來只會得到一張空清單。 */
+function datePicker(body, current, onPick) {
+  const box = el("div", "picker");
+  box.append(el("div", "picker__title", `其他日期組合(共 ${body.groups.length} 種,照總價排)`));
+
+  for (const [index, group] of body.groups.entries()) {
+    const seq = group.plans[0]?.sequence || [];
+    const row = el("button", `picker__row${index === current ? " picker__row--on" : ""}`);
+    row.type = "button";
+    row.append(el("span", "picker__when",
+      seq.map((t) => `${t.label} ${t.depart.slice(5)}–${t.back.slice(5)}`).join("  ")));
+
+    const legs = group.plans.find((p) => p.method === "reverse")?.reference_legs || [];
+    const known = legs.map((l) => l.airline).filter(Boolean);
+    if (known.length) {
+      const names = [...new Set(known)]
+        .map((code) => state.airlineNames.get(code) || code);
+      const off = state.airlines.size && !known.some((c) => state.airlines.has(c));
+      row.append(el("span", `picker__air${off ? " picker__air--other" : ""}`, names.join("・")));
+    }
+
+    row.append(el("span",
+      group.split_total != null ? "picker__price" : "picker__price picker__price--none",
+      group.split_total != null ? money(group.split_total, body.currency) : "缺價"));
+    row.addEventListener("click", () => onPick(index));
+    box.append(row);
+  }
+  return box;
+}
+
 function methodCard(plan, currency) {
   const card = el("div", `method${plan.method === "reverse" ? " method--reverse" : ""}`);
 
@@ -895,15 +934,16 @@ async function runReverse(event) {
       showNotice("注意", warning, "alert", topicOf(warning));
     }
 
-    // 只顯示「反向機票:兩張交叉的來回票」—— 流通版本講的就是這一種。
-    // 其餘三種後端照樣算、測試照樣守著,想拿回來比較時只要改這一行。
-    const plans = body.groups[0].plans.filter((plan) => plan.method === "reverse");
-
-    const group = body.groups[0];
     const list = $("#rev-list");
-    list.replaceChildren();
-    list.append(totalCard(group, body.currency));
-    for (const plan of plans) list.append(methodCard(plan, body.currency));
+    const draw = (index) => {
+      const group = body.groups[index];
+      const chosen = group.plans.filter((plan) => plan.method === "reverse");
+      list.replaceChildren();
+      list.append(totalCard(group, body.currency));
+      list.append(datePicker(body, index, draw));
+      for (const plan of chosen) list.append(methodCard(plan, body.currency));
+    };
+    draw(0);
 
     const seq = group.plans[0]?.sequence || [];
     $("#rev-summary").textContent = seq.length
