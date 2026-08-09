@@ -546,23 +546,26 @@ class TestTheReverseCardIsNotJustBlank:
 
     def test_the_two_tickets_carry_the_names_the_article_uses(self, client, priced):
         plan = self._reverse_plan(client)
-        assert [t["code"] for t in plan["tickets"]] == ["A", "B"]
+        assert [t["role"] for t in plan["tickets"]] == ["第 1 張票", "第 2 張票"]
+        assert [t["code"] for t in plan["tickets"]] == ["台北出發", "東京出發"]
         assert [leg["code"] for t in plan["tickets"] for leg in t["legs"]] == [
-            "A1", "A2", "B1", "B2"
+            "東京 去程", "大阪 回程", "東京 回程", "大阪 去程",
         ]
 
     def test_it_says_which_segments_you_fly_on_which_trip(self, client, priced):
         """票是交叉的,行程不是。少了這段,使用者會以為得照票面順序飛。"""
         plan = self._reverse_plan(client)
         assert [tuple(t["codes"]) for t in plan["sequence"]] == [
-            ("A1", "B1"), ("B2", "A2")
+            ("第 1 張票", "第 2 張票"), ("第 2 張票", "第 1 張票"),
         ]
 
     def test_the_four_one_way_prices_come_along_as_a_reference(self, client, priced):
         plan = self._reverse_plan(client)
         legs = plan["reference_legs"]
         assert len(legs) == 4
-        assert {leg["code"] for leg in legs} == {"A1", "A2", "B1", "B2"}
+        assert {leg["code"] for leg in legs} == {
+            "東京 去程", "東京 回程", "大阪 去程", "大阪 回程",
+        }
         assert any(leg["price"] is not None for leg in legs)
 
     def test_the_reference_never_offers_a_total(self, client, priced):

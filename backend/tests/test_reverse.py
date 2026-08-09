@@ -52,10 +52,10 @@ class TestTheFourBuyingMethods:
         plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
         wrapper, reverse_ticket = plan.tickets
 
-        assert wrapper.role == "包覆票"
+        assert wrapper.role == "第 1 張票"
         assert legs_of(wrapper) == ["TPE→NRT@2026-10-05", "KIX→TPE@2026-12-11"]
 
-        assert reverse_ticket.role == "倒買票"
+        assert reverse_ticket.role == "第 2 張票"
         assert legs_of(reverse_ticket) == ["NRT→TPE@2026-10-10", "TPE→KIX@2026-12-06"]
 
     def test_split_is_four_separate_one_ways(self):
@@ -89,7 +89,7 @@ class TestHybrid:
         plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "hybrid")
         out, reverse_ticket, back = plan.tickets
 
-        assert (out.role, reverse_ticket.role, back.role) == ("單程", "倒買票", "單程")
+        assert (out.role, reverse_ticket.role, back.role) == ("單程", "綁在一起的那張", "單程")
         assert legs_of(out) == ["TPE→NRT@2026-10-05"]
         assert legs_of(reverse_ticket) == ["NRT→TPE@2026-10-10", "TPE→KIX@2026-12-06"]
         assert legs_of(back) == ["KIX→TPE@2026-12-11"]
@@ -99,7 +99,7 @@ class TestHybrid:
         台灣出發的航段黏在一起,沒有外站計價可佔便宜,所以鏡像變體刻意不做。"""
         plans = build_plans(HOME, TOKYO, OSAKA)
         kept = plan_of(plans, "hybrid").tickets[1]
-        dao_mai = next(t for t in plan_of(plans, "reverse").tickets if t.role == "倒買票")
+        dao_mai = plan_of(plans, "reverse").tickets[1]   # 外站出發那張
         assert kept.legs == dao_mai.legs
 
     def test_only_the_reverse_ticket_is_open_jaw(self):
@@ -265,25 +265,41 @@ class TestRisks:
 
 
 class TestTheNamingPeopleActuallyUse:
-    """流通版本用 A 票/B 票、A1/A2/B1/B2 講這件事,使用者是拿著那篇文章來對照的。
+    """名詞只留「去程 / 回程 / 第幾張票」。
 
-    代號是**航段**的屬性,不是某一張票的:哪一段在哪張票上會隨買法變,
-    但「A1 是第一趟的去程」從頭到尾不變。
+    原本一張票上同時掛著 A 票、包覆票、開口、A1、A2 —— 五個標籤,而其中沒有
+    一個講的是「你要做什麼」。使用者回報看不懂,那就是看不懂。
     """
 
-    def test_the_two_tickets_are_a_and_b(self):
+    def test_a_ticket_says_which_one_it_is_and_where_it_starts(self):
         plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
         wrapper, reverse_ticket = plan.tickets
-        assert (wrapper.code, wrapper.leg_codes) == ("A", ("A1", "A2"))
-        assert (reverse_ticket.code, reverse_ticket.leg_codes) == ("B", ("B1", "B2"))
+        assert (wrapper.role, wrapper.code) == ("第 1 張票", "台北出發")
+        assert (reverse_ticket.role, reverse_ticket.code) == ("第 2 張票", "東京出發")
 
-    def test_a1_is_the_first_trips_outbound_and_a2_the_second_trips_return(self):
-        """照文章的定義:A 票 = 台北起點,拿第一趟的去程與第二趟的回程。"""
+    def test_no_jargon_survives_on_a_ticket(self):
+        """開口 / 包覆票 / 倒買票 / A1 全部不該再出現在使用者看得到的字串上。"""
+        plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
+        shown = " ".join(
+            f"{t.role} {t.code} {t.note or ''} {' '.join(t.leg_codes)}"
+            for t in plan.tickets
+        )
+        for word in ("包覆票", "倒買票", "開口", "A1", "A2", "B1", "B2"):
+            assert word not in shown, f"{word} 還在畫面上"
+
+    def test_a_leg_is_named_by_the_trip_and_direction(self):
+        plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
+        wrapper, reverse_ticket = plan.tickets
+        assert wrapper.leg_codes == ("東京 去程", "大阪 回程")
+        assert reverse_ticket.leg_codes == ("東京 回程", "大阪 去程")
+
+    def test_the_first_ticket_holds_the_first_outbound_and_the_second_return(self):
+        """第 1 張票 = 台北出發,拿第一趟的去程與第二趟的回程。"""
         plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
         wrapper = plan.tickets[0]
         assert legs_of(wrapper) == ["TPE→NRT@2026-10-05", "KIX→TPE@2026-12-11"]
 
-    def test_b1_is_the_first_trips_return_and_b2_the_second_trips_outbound(self):
+    def test_the_second_ticket_holds_the_first_return_and_the_second_outbound(self):
         plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
         reverse_ticket = plan.tickets[1]
         assert legs_of(reverse_ticket) == ["NRT→TPE@2026-10-10", "TPE→KIX@2026-12-06"]
@@ -293,8 +309,8 @@ class TestTheNamingPeopleActuallyUse:
         先台北→東京、再大阪→台北?那個誤解會直接勸退他。"""
         plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
         assert [(t.label, t.codes) for t in plan.sequence] == [
-            ("東京", ("A1", "B1")),
-            ("大阪", ("B2", "A2")),
+            ("東京", ("第 1 張票", "第 2 張票")),
+            ("大阪", ("第 2 張票", "第 1 張票")),
         ]
 
     def test_the_same_codes_describe_every_buying_method(self):

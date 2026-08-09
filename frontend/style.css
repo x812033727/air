@@ -675,8 +675,8 @@ a.chip { text-decoration: none; }
 /* 「A 票」是別人講倒買法時用的名字,所以它要比「包覆票」更醒目 ——
    使用者是拿著那篇文章來對照的。 */
 .ticket__code {
-  font-size: 0.9rem;
-  letter-spacing: 0.12em;
+  font-size: 0.85rem;
+  letter-spacing: 0.06em;
   border-bottom: 2px solid var(--airway);
   padding-bottom: 0.1rem;
   margin-bottom: 0.25rem;
@@ -1035,4 +1035,12 @@ a.chip { text-decoration: none; }
   border-left: 2px solid var(--boundary);
   padding-left: 0.6rem;
   margin-top: 0.2rem;
+}
+
+.ticket__from {
+  margin-top: 0.3rem;
+  font-family: var(--han);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+  color: var(--ink);
 }

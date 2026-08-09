@@ -620,11 +620,10 @@ function ticketRow(ticket, currency) {
   const row = el("div", "ticket");
 
   const role = el("div", "ticket__role");
-  // 「A 票 / B 票」是流通版本的講法,「包覆票 / 倒買票」說的是它為什麼長這樣。
-  // 兩個都留:前者讓人對得上別人講的,後者讓人知道哪一張是省錢的那張。
-  if (ticket.code) role.append(el("b", "ticket__code", `${ticket.code} 票`));
-  role.append(el("b", null, ticket.role));
-  if (ticket.open_jaw) role.append(document.createTextNode("開口"));
+  // 名詞只留「第幾張票」跟「從哪出發」。原本這裡同時掛著 A 票、包覆票、開口 ——
+  // 三個標籤沒有一個講的是使用者要做什麼,而使用者回報看不懂。
+  role.append(el("b", "ticket__code", ticket.role));
+  if (ticket.code) role.append(el("div", "ticket__from", ticket.code));
   if (ticket.pricing) {
     role.append(el("div", "ticket__price",
       ticket.pricing.total != null ? money(ticket.pricing.total, currency) : "查無資料"));
