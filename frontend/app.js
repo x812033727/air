@@ -19,6 +19,9 @@ const state = {
   // 目前畫在畫面上的那一組,給「比一比」重畫時用。
   lastGroup: null,
   lastCurrency: "TWD",
+  // 匯率。外站出發那張票用外幣賣,不換算就沒辦法比。
+  fx: {},
+  fxBase: "TWD",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -878,24 +881,52 @@ function saveQuote(sig, value) {
   localStorage.setItem(QUOTE_STORE, JSON.stringify(all));
 }
 
-function quoteRow(ticket) {
+/* 幣別是必要的,不是選配。反向機票省錢的那張票從外站出發,**就用外站的幣別賣**
+ * —— 使用者實測的星宇例子:台北出發那張 TWD 17,095,大阪出發那張 JPY 84,540。
+ * 只吃 TWD 的欄位對這個功能來說等於壞的。 */
+const QUOTE_CURRENCIES = ["TWD", "JPY", "KRW", "USD", "HKD", "EUR", "CNY", "THB", "SGD"];
+
+function quoteRow(ticket, label) {
   const sig = ticketSignature(ticket);
   const row = el("div", "quote");
-  row.append(el("span", "quote__label", "查到多少?填回來"));
+  row.append(el("span", "quote__label", label || "查到多少?填回來"));
+
+  const saved = loadQuotes()[sig] || {};
   const input = el("input", "quote__input");
   input.type = "number";
   input.min = "0";
   input.step = "1";
-  input.placeholder = "例如 12800";
-  const saved = loadQuotes()[sig];
-  if (saved != null) input.value = saved;
-  input.addEventListener("input", () => {
-    const value = input.value.trim() === "" ? null : Number(input.value);
-    saveQuote(sig, Number.isFinite(value) ? value : null);
+  input.placeholder = "例如 17095";
+  if (saved.amount != null) input.value = saved.amount;
+
+  const currency = el("select", "quote__currency");
+  for (const code of QUOTE_CURRENCIES) {
+    const option = el("option", null, code);
+    option.value = code;
+    if (code === (saved.currency || "TWD")) option.selected = true;
+    currency.append(option);
+  }
+
+  const commit = () => {
+    const amount = input.value.trim() === "" ? null : Number(input.value);
+    saveQuote(sig, Number.isFinite(amount) && amount != null
+      ? { amount, currency: currency.value } : null);
     redrawCompare();
-  });
-  row.append(input);
+  };
+  input.addEventListener("input", commit);
+  currency.addEventListener("change", commit);
+
+  row.append(input, currency);
   return row;
+}
+
+/** 換成站台幣別。拿不到匯率就回 null —— 用一個編的匯率算出來的比較,
+ *  比不比較更糟。 */
+function toBase(quote) {
+  if (!quote || quote.amount == null) return null;
+  if (quote.currency === state.fxBase) return quote.amount;
+  const rate = state.fx[quote.currency];
+  return rate ? quote.amount / rate : null;
 }
 
 /** 比一比:兩張反向票 vs 四段全拆單程。
@@ -905,48 +936,67 @@ function quoteRow(ticket) {
 function compareCard(group, currency) {
   const card = el("div", "compare");
   card.id = "compare";
-
-  const tickets = group.plans.find((p) => p.method === "reverse")?.tickets || [];
-  const quotes = loadQuotes();
-  const entered = tickets.map((t) => quotes[ticketSignature(t)]);
-  const missing = entered.filter((v) => v == null).length;
-  const split = group.split_total;
-
   card.append(el("div", "compare__title", "比一比"));
 
-  if (missing) {
-    card.append(el("div", "compare__hint",
-      `把兩張票的實際票價填進上面的欄位(還缺 ${missing} 張),` +
-      `站台就會告訴你這樣買到底有沒有比較便宜。`));
-    return card;
+  const reverseTickets = group.plans.find((p) => p.method === "reverse")?.tickets || [];
+  const normalTickets = group.plans.find((p) => p.method === "normal")?.tickets || [];
+  const quotes = loadQuotes();
+  const sum = (tickets) => {
+    const values = tickets.map((t) => toBase(quotes[ticketSignature(t)]));
+    return values.every((v) => v != null)
+      ? values.reduce((a, b) => a + b, 0)
+      : null;
+  };
+
+  // 普通買法(兩張各自的來回票)才是使用者真正要比的基準 —— 那是「不用這招的話
+  // 我本來會付多少」。四段全拆單程是站台自己算得出來的另一個參考點。
+  card.append(el("div", "compare__group", "普通買法:兩張各自的來回票"));
+  for (const [index, ticket] of normalTickets.entries()) {
+    card.append(quoteRow(ticket, `第 ${index + 1} 趟來回`));
   }
 
-  const reverseTotal = entered.reduce((a, b) => a + b, 0);
-  const rows = [["反向機票(你查到的兩張)", reverseTotal]];
-  if (split != null) rows.push(["同樣四段,各自買單程", split]);
+  const reverseTotal = sum(reverseTickets);
+  const normalTotal = sum(normalTickets);
+  const split = group.split_total;
+
+  const rows = [];
+  if (normalTotal != null) rows.push(["普通買法:兩張來回票", normalTotal]);
+  if (reverseTotal != null) rows.push(["反向機票:你查到的兩張", reverseTotal]);
+  if (split != null) rows.push(["四段全拆:四張單程(站台算的)", split]);
+
+  if (reverseTotal == null) {
+    card.append(el("div", "compare__hint",
+      "把上面兩張反向票查到的價填回來,就會出現比較。外站出發那張多半是外幣 —— " +
+      "記得把幣別一起改,站台會換算。"));
+    return card;
+  }
 
   const best = Math.min(...rows.map(([, v]) => v));
   for (const [label, value] of rows) {
     const row = el("div", `compare__row${value === best ? " compare__row--best" : ""}`);
     row.append(el("span", null, label));
-    row.append(el("span", "compare__price", money(value, currency)));
+    row.append(el("span", "compare__price", money(Math.round(value), currency)));
     card.append(row);
   }
 
-  if (split != null) {
-    const delta = split - reverseTotal;
+  if (normalTotal != null) {
+    const delta = normalTotal - reverseTotal;
+    const pct = Math.abs(delta) / normalTotal * 100;
     card.append(
       el("div", delta > 0 ? "compare__verdict" : "compare__verdict compare__verdict--worse",
          delta > 0
-           ? `反向機票便宜 ${money(delta, currency)} —— 值得這樣買。`
+           ? `反向機票省 ${money(Math.round(delta), currency)}(${pct.toFixed(1)}%)`
            : delta < 0
-             ? `反向機票貴 ${money(-delta, currency)} —— 這組行程直接買四張單程就好。`
-             : "兩種一樣價 —— 那就挑規則寬鬆的那種,四張單程改期比較自由。")
+             ? `反向機票貴 ${money(Math.round(-delta), currency)} —— 這組行程照普通買法買就好。`
+             : "兩種一樣價。")
     );
     if (delta > 0) {
       card.append(el("div", "compare__hint",
         "省下來的是用「兩趟都一定會去」換的:同一張票必須依序使用,第一趟沒搭,第二趟就失效。"));
     }
+  } else {
+    card.append(el("div", "compare__hint",
+      "再把「普通買法」那兩張來回票的價填上去,就知道這招對你這組行程省多少。"));
   }
   return card;
 }
@@ -1137,6 +1187,9 @@ async function init() {
   wirePasswordPanel();
   wireAirlinePanel();
   $("#nonstop").addEventListener("change", noteStale);
+  api("/api/fx")
+    .then((body) => { state.fx = body.rates || {}; state.fxBase = body.base || "TWD"; })
+    .catch(() => {});   // 拿不到就只能比同幣別的,不擋其他功能
   await migrateLegacyKeys();
   await renderKeyState();
   await initReverse();

@@ -1169,3 +1169,15 @@ a.chip { text-decoration: none; }
 }
 
 .compare__verdict--worse { color: var(--boundary); }
+
+.quote__currency { width: 5.5rem; min-width: 0; }
+
+.compare__group {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-faint);
+  margin-top: 0.5rem;
+}
+
+.compare .quote { border-top: none; padding-top: 0; margin-top: 0.3rem; }

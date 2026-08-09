@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
 from pathlib import Path
@@ -14,12 +14,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+import httpx
 from pydantic import BaseModel, Field
 
 from app import airlines, credentials, gaps, refdata, reverse, search, zh_names
 from app.combos import SpecTooLarge
 from app.config import settings
-from app.db import closing_conn, connect, init_db, source_health
+from app.db import closing_conn, connect, init_db, source_health, utcnow
 from app.password import PasswordError, change_password
 from app.pricing import cached, deeplinks
 from app.pricing.live import get_provider
@@ -221,6 +222,54 @@ def search_places(
             for city in cities
         ]
     }
+
+
+FX_URL = "https://open.er-api.com/v6/latest"
+FX_TTL_HOURS = 12
+
+
+@app.get("/api/fx")
+def exchange_rates(conn: sqlite3.Connection = Depends(get_conn)) -> dict[str, Any]:
+    """匯率,基準是站台幣別。
+
+    反向機票**一定會踩到這個**:省錢的那張票從外站出發,就用外站的幣別賣 ——
+    使用者實測的星宇例子裡,大阪出發那張報的是 JPY 84,540,而台北出發那張是
+    TWD 17,095。兩個數字不換算就沒辦法比,而「不能比」正是這個功能的全部意義。
+
+    Travelpayouts 沒有匯率端點(`/data/currency.json` 回 403),所以走外部來源,
+    快取 12 小時 —— 匯率不是這個站的賣點,不值得每次搜尋都打一次外網。
+    """
+    import json as _json
+
+    row = conn.execute(
+        "SELECT value, updated_at FROM app_settings WHERE key = 'fx'"
+    ).fetchone()
+    if row:
+        age = utcnow() - datetime.fromisoformat(row["updated_at"])
+        if age < timedelta(hours=FX_TTL_HOURS):
+            return _json.loads(row["value"])
+
+    base = settings.default_currency.upper()
+    try:
+        with httpx.Client(timeout=settings.request_timeout_s) as client:
+            payload = client.get(f"{FX_URL}/{base}").json()
+        rates = payload.get("rates") or {}
+        if not rates:
+            raise ValueError("匯率來源回了空的 rates")
+    except Exception as exc:  # noqa: BLE001
+        # 拿不到匯率不該讓整頁掛掉 —— 但也不能默默用一個過期或編造的數字。
+        if row:
+            return _json.loads(row["value"])
+        raise HTTPException(status_code=503, detail=f"拿不到匯率:{type(exc).__name__}") from exc
+
+    body = {"base": base, "rates": rates, "fetched_at": utcnow().isoformat()}
+    conn.execute(
+        "INSERT INTO app_settings (key, value, updated_at) VALUES ('fx', ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        (_json.dumps(body), utcnow().isoformat()),
+    )
+    conn.commit()
+    return body
 
 
 @app.get("/api/ref/airlines")
