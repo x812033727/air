@@ -43,6 +43,11 @@ class Quote:
     carrier: str | None = None
     offer_count: int = 0
     fetched_at: datetime = field(default_factory=utcnow)
+    # Duffel 的 test mode 回的是**虛構航空的假價**(carrier「Duffel Airways」,
+    # 幣別 AUD,TPE→KIX ＋ NRT→TPE 報 161)。那些數字長得跟真的一模一樣,
+    # 一旦流進比價就會用假價算出一個看起來很真的結論 —— 所以要帶著旗標走,
+    # 由呼叫端決定怎麼擋,而不是讓它安靜地混進去。
+    test_mode: bool = False
 
     def __post_init__(self) -> None:
         if self.total is None and not self.unavailable_reason:
@@ -129,10 +134,14 @@ class DuffelProvider:
 
     name = "duffel"
 
+    #: Duffel 用 token 前綴區分沙盒與正式,這是官方的命名,不是猜的。
+    TEST_PREFIX = "duffel_test_"
+
     def __init__(self, token: str | None = None, client: httpx.Client | None = None) -> None:
         self._token = token if token is not None else settings.duffel_token
         self._client = client
         self.available = bool(self._token)
+        self.test_mode = self._token.startswith(self.TEST_PREFIX)
 
     def _post_offer_request(self, slices: Sequence[dict[str, str]], passengers: int, cabin: str):
         client = self._client or httpx.Client(timeout=settings.request_timeout_s)
@@ -175,6 +184,7 @@ class DuffelProvider:
                 source=self.name,
                 currency=settings.default_currency,
                 unavailable_reason=f"即時查價失敗:{type(exc).__name__}",
+                test_mode=self.test_mode,
             )
 
         offers = (payload.get("data") or {}).get("offers") or []
@@ -184,6 +194,7 @@ class DuffelProvider:
                 source=self.name,
                 currency=settings.default_currency,
                 unavailable_reason="此行程查無可售票種",
+                test_mode=self.test_mode,
             )
 
         cheapest = min(offers, key=lambda offer: float(offer.get("total_amount", "inf")))
@@ -193,6 +204,7 @@ class DuffelProvider:
             total=float(cheapest["total_amount"]),
             carrier=(cheapest.get("owner") or {}).get("name"),
             offer_count=len(offers),
+            test_mode=self.test_mode,
         )
 
     @staticmethod

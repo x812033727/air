@@ -155,3 +155,33 @@ class TestSplitQuote:
         )
         assert split.total == 12200
         assert split.unavailable_reason is None
+
+
+class TestDuffelTestModeIsNeverMistakenForReal:
+    """Duffel 的沙盒回的是**虛構航空的假價**:carrier「Duffel Airways」、幣別 AUD,
+    台北→大阪 ＋ 東京→台北 報 161。那些數字長得跟真的一模一樣,一旦流進比價,
+    就會用假價算出一個看起來很真的省錢結論 —— 這是這個專案最不能犯的錯。
+    """
+
+    def test_a_test_token_marks_every_quote(self):
+        provider = DuffelProvider("duffel_test_abc123")
+        assert provider.test_mode is True
+
+    def test_a_live_token_does_not(self):
+        assert DuffelProvider("duffel_live_abc123").test_mode is False
+
+    def test_the_flag_rides_along_with_an_unavailable_quote_too(self):
+        """查無票種也要帶旗標 —— 否則畫面只能在「有價」時判斷,
+        而使用者會以為沙盒只是這次沒查到。"""
+        provider = DuffelProvider("duffel_test_abc123", client=_FailingClient())
+        quote = provider.price_single_ticket(COMBO)
+        assert quote.total is None
+        assert quote.test_mode is True
+
+
+class _FailingClient:
+    def post(self, *args, **kwargs):
+        raise RuntimeError("boom")
+
+    def close(self):
+        return None

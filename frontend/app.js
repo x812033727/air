@@ -1017,6 +1017,18 @@ function liveButton(ticket, row) {
         row.append(el("span", "quote__note", quote.unavailable_reason));
         return;
       }
+      // 測試 token 回的是虛構航空的假價(carrier「Duffel Airways」、幣別 AUD、
+      // 台北→大阪 ＋ 東京→台北 報 161)。長得跟真的一模一樣,所以**絕不能**
+      // 讓它自動填進比價欄位 —— 那會用假價算出一個看起來很真的省錢結論。
+      if (quote.test_mode) {
+        button.disabled = false;
+        button.textContent = "查真價";
+        row.append(el("span", "quote__warn",
+          `這是 Duffel 測試金鑰,回的是虛構航空的假價` +
+          `(${quote.carrier}・${quote.currency} ${Math.round(quote.total)})—— 沒有填進去。` +
+          `要真價需要 live token。`));
+        return;
+      }
       // 查到就直接填進欄位,連幣別一起 —— 使用者不必再抄一次。
       const input = row.querySelector(".quote__input");
       const currency = row.querySelector(".quote__currency");

@@ -451,6 +451,9 @@ def verify(body: VerifyIn, conn: sqlite3.Connection = Depends(get_conn)) -> dict
             "total": single.total,
             "currency": single.currency,
             "carrier": single.carrier,
+            # 測試 token 回的是虛構航空的假價。標出來,讓畫面有辦法擋掉 ——
+            # 那些數字長得跟真的一樣,混進比價就會用假價算出很像真的結論。
+            "test_mode": single.test_mode,
             "offer_count": single.offer_count,
             "unavailable_reason": single.unavailable_reason,
             "fetched_at": single.fetched_at.isoformat(),
