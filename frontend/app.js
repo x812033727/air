@@ -935,6 +935,9 @@ async function runReverse(event) {
     }
 
     const list = $("#rev-list");
+    // 摘要要跟著使用者挑的那一組走,所以跟卡片一起重畫 —— 放在 draw 外面
+    // 只會永遠描述第 0 組,而且那正是上一版把 `group` 用在作用域外、
+    // 讓整個請求丟出 ReferenceError 的地方。
     const draw = (index) => {
       const group = body.groups[index];
       const chosen = group.plans.filter((plan) => plan.method === "reverse");
@@ -942,14 +945,15 @@ async function runReverse(event) {
       list.append(totalCard(group, body.currency));
       list.append(datePicker(body, index, draw));
       for (const plan of chosen) list.append(methodCard(plan, body.currency));
+
+      const seq = group.plans[0]?.sequence || [];
+      $("#rev-summary").textContent = seq.length
+        ? seq.map((t) => `${t.label} ${t.depart.slice(5)}–${t.back.slice(5)}`).join(" · ") +
+          ` — ${body.group_count} 種日期組合裡的第 ${index + 1} 種`
+        : `${body.route_pairs} 條航線 · ${body.months.join("、")}`;
     };
     draw(0);
 
-    const seq = group.plans[0]?.sequence || [];
-    $("#rev-summary").textContent = seq.length
-      ? `${seq.map((t) => `${t.label} ${t.depart.slice(5)}–${t.back.slice(5)}`).join(" · ")}` +
-        ` — 從 ${body.group_count} 種機場與日期組合裡挑最便宜的`
-      : `${body.route_pairs} 條航線 · ${body.months.join("、")}`;
     $("#reverse-results").hidden = false;
     $("#reverse-results").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
