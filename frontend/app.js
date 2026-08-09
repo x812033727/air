@@ -785,6 +785,39 @@ function referenceBlock(legs, currency) {
  *  刻意不寫成「上限」:實測 16 組來回票對兩張單程,有 4 組來回票**比較貴**
  *  (最高 1.117 倍,幾乎都是廉航 —— 廉航的來回票本來就是兩張單程黏起來)。
  *  標成上限而使用者點進去發現更貴,錯的方向剛好是最糟的那個。 */
+/** 使用者選了航空公司之後,這個數字到底跟他有沒有關係。
+ *
+ *  最糟的情況不是「有幾段不符合」,是**一段都不符合**:實測選星宇 + 直飛,
+ *  四段裡兩段是捷星、兩段連誰飛的都不知道,星宇在這四條航線的快取裡一次都沒出現過
+ *  —— 而畫面照樣端出一個看起來很篤定的總價。設了兩個條件卻完全看不出設過,
+ *  那不是資訊不足,是畫面在誤導。 */
+function airlineVerdict(group, currency) {
+  const legs = group.plans.find((p) => p.method === "reverse")?.reference_legs || [];
+  const known = legs.map((l) => l.airline).filter(Boolean);
+  const mine = known.filter((code) => state.airlines.has(code));
+  const wanted = [...state.airlines]
+    .map((code) => state.airlineNames.get(code) || code).join("、");
+  const others = [...new Set(known.filter((code) => !state.airlines.has(code)))]
+    .map((code) => state.airlineNames.get(code) || code);
+
+  const box = el("div", "total__warn");
+  if (mine.length) {
+    box.append(el("div", null,
+      `四段裡有 ${mine.length} 段是${wanted},其餘不是 —— 每段旁邊都標了是誰飛的。`));
+    return box;
+  }
+
+  box.append(el("b", null, `這個價跟${wanted}無關。`));
+  box.append(el("div", null,
+    known.length
+      ? `這四段目前拿得到的是${others.join("、")},${wanted}一段都沒有。`
+      : `這四段目前連是誰飛的都拿不到,所以無法確認有沒有${wanted}。`));
+  box.append(el("div", "total__why",
+    `上游一天只給最便宜的那一筆票價,而最便宜的幾乎都是廉航 —— ` +
+    `${wanted}要看真價,只能點下面的連結(連結有幫你篩)。`));
+  return box;
+}
+
 function totalCard(group, currency) {
   const card = el("div", "total");
   if (group.split_total != null) {
@@ -797,14 +830,7 @@ function totalCard(group, currency) {
     if ($("#nonstop").checked) {
       card.append(el("div", "total__applied", "只要直達 —— 已算進這個數字"));
     }
-    if (state.airlines.size) {
-      const names = [...state.airlines]
-        .map((code) => state.airlineNames.get(code) || code).join("、");
-      card.append(
-        el("div", "total__warn",
-           `不分航空公司的最低價 —— 下面每一段都標了是誰飛的,不是${names}的就是灰的。`)
-      );
-    }
+    if (state.airlines.size) card.append(airlineVerdict(group, currency));
 
     card.append(el("div", "total__note",
       "反向票要比這個便宜才值得買。"));

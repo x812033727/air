@@ -1099,3 +1099,7 @@ a.chip { text-decoration: none; }
 .picker__air--other { color: var(--ink-faint); text-decoration: line-through; }
 .picker__price { font-variant-numeric: tabular-nums; color: var(--ink); }
 .picker__price--none { color: var(--boundary); }
+
+.total__warn b { display: block; margin-bottom: 0.2rem; }
+.total__warn > div { margin-bottom: 0.2rem; }
+.total__why { color: var(--ink-faint); }
