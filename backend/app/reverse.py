@@ -66,6 +66,11 @@ class Ticket:
     # 這張票能不能誠實標價。只有單程票是 True:單程快取價就是單程票的真價;
     # 按來回計價開的票(來回、開口)用單程價拼必然算錯,所以永遠是 False。
     priceable: bool = False
+    # 「A」或「B」,以及每一段的代號(A1、A2…)。倒買法談的是「哪一段在哪張票上」,
+    # 而那件事光看兩條航線圖是看不出來的 —— 四段長得都像去程或回程。
+    code: str = ""
+    leg_codes: tuple[str, ...] = ()
+    note: str | None = None
 
     @property
     def combo(self) -> Combo:
@@ -100,6 +105,21 @@ class Ticket:
 
 
 @dataclass(frozen=True)
+class TripOrder:
+    """一趟旅行當天實際會飛的兩段,依序。
+
+    這是倒買法唯一真正難懂的地方:票是交叉的,但**飛的順序是正常的**。
+    第一趟照樣是去了再回來,只是回程那張票上印的出發地是外站。沒有這張對照表,
+    使用者看著兩張交叉的票會以為自己得照票面順序飛。
+    """
+
+    label: str
+    depart: date
+    back: date
+    codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Plan:
     """一種買法:買哪幾張票,以及它有什麼風險。"""
 
@@ -108,6 +128,7 @@ class Plan:
     tickets: tuple[Ticket, ...]
     priceable: bool
     unavailable_reason: str | None = None
+    sequence: tuple[TripOrder, ...] = ()
 
     @property
     def legs(self) -> tuple[FlightLeg, ...]:
@@ -146,35 +167,57 @@ def build_plans(home: Sequence[str], first: Trip, second: Trip) -> list[Plan]:
     b_out = FlightLeg(home_out, second.airports[0], second.depart, "家", second.label)
     b_back = FlightLeg(second.airports[-1], home_back, second.back, second.label, "家")
 
+    # 代號是**航段**的屬性,不是某一張票的:哪一段在哪張票上會隨買法變,但
+    # 「A1 是第一趟的去程」從頭到尾不變,所以每種買法都能用同一套代號對照。
+    #   A1 第一趟去程   B1 第一趟回程   B2 第二趟去程   A2 第二趟回程
+    # 這組命名照的是流通版本的講法(A 票台北起點、B 票外站起點),不是自創的。
+    codes = {a_out: "A1", a_back: "B1", b_out: "B2", b_back: "A2"}
+
+    # 飛的順序永遠是正常的:去了再回來。交叉的是票,不是行程。
+    sequence = (
+        TripOrder(first.label, first.depart, first.back, ("A1", "B1")),
+        TripOrder(second.label, second.depart, second.back, ("B2", "A2")),
+    )
+
     normal = Plan(
         method="normal",
         method_label="普通買法:兩張各自的來回票",
         tickets=(
-            Ticket(f"台北→{first.label}→台北", "第一趟來回", (a_out, a_back)),
-            Ticket(f"台北→{second.label}→台北", "第二趟來回", (b_out, b_back)),
+            Ticket(f"台北→{first.label}→台北", "第一趟來回", (a_out, a_back),
+                   leg_codes=("A1", "B1")),
+            Ticket(f"台北→{second.label}→台北", "第二趟來回", (b_out, b_back),
+                   leg_codes=("B2", "A2")),
         ),
         priceable=False,
         unavailable_reason=NO_ROUND_TRIP_DATA,
+        sequence=sequence,
     )
 
     # 交叉:每張票各拿一趟的去程與另一趟的回程。兩張都是開口來回票。
     reverse = Plan(
         method="reverse",
-        method_label="倒買法:兩張交叉的開口來回票",
+        method_label="反向機票:兩張交叉的來回票",
         tickets=(
             Ticket(
                 f"台北→{first.label} ＋ {second.label}→台北",
                 "包覆票",
                 (a_out, b_back),
+                code="A",
+                leg_codes=("A1", "A2"),
+                note="台北起點。第一趟的去程 ＋ 第二趟的回程",
             ),
             Ticket(
                 f"{first.label}→台北 ＋ 台北→{second.label}",
                 "倒買票",
                 (a_back, b_out),
+                code="B",
+                leg_codes=("B1", "B2"),
+                note=f"{first.label}起點 —— 省錢與便宜商務艙就來自這張",
             ),
         ),
         priceable=False,
         unavailable_reason=NO_ROUND_TRIP_DATA,
+        sequence=sequence,
     )
 
     # 混搭:只留倒買票(外站出發那張 —— 省錢的機制就在外站計價,商務艙也常便宜),
@@ -185,19 +228,24 @@ def build_plans(home: Sequence[str], first: Trip, second: Trip) -> list[Plan]:
         method_label="單程＋反向:兩張單程＋一張倒買票",
         tickets=(
             Ticket(
-                f"{a_out.origin}→{a_out.destination}", "單程", (a_out,), priceable=True
+                f"{a_out.origin}→{a_out.destination}", "單程", (a_out,),
+                priceable=True, leg_codes=("A1",),
             ),
             Ticket(
                 f"{first.label}→台北 ＋ 台北→{second.label}",
                 "倒買票",
                 (a_back, b_out),
+                code="B",
+                leg_codes=("B1", "B2"),
             ),
             Ticket(
-                f"{b_back.origin}→{b_back.destination}", "單程", (b_back,), priceable=True
+                f"{b_back.origin}→{b_back.destination}", "單程", (b_back,),
+                priceable=True, leg_codes=("A2",),
             ),
         ),
         priceable=False,
         unavailable_reason=HYBRID_NO_TOTAL,
+        sequence=sequence,
     )
 
     # 四張單程。這是唯一整個買法都有資料可以算的。
@@ -205,10 +253,12 @@ def build_plans(home: Sequence[str], first: Trip, second: Trip) -> list[Plan]:
         method="split",
         method_label="四段全拆:四張單程票",
         tickets=tuple(
-            Ticket(f"{leg.origin}→{leg.destination}", "單程", (leg,), priceable=True)
+            Ticket(f"{leg.origin}→{leg.destination}", "單程", (leg,),
+                   priceable=True, leg_codes=(codes[leg],))
             for leg in (a_out, a_back, b_out, b_back)
         ),
         priceable=True,
+        sequence=sequence,
     )
 
     return [normal, reverse, hybrid, split]
@@ -293,7 +343,9 @@ def risks(plan: Plan) -> list[str]:
         notes.append(
             "同一張票必須依序使用:第一趟的航段沒搭或取消,同一張票上第二趟的航段會自動失效"
         )
+        notes.append("兩張票要同時買 —— 這是「我確定兩趟都會去」換來的價差,不是一個搜尋結果")
         notes.append("兩趟旅行綁在一起,改期或退票要同時處理兩趟")
+        notes.append("傳統航空的旺季最有感;廉航促銷常常還是更便宜,一定要點開比過再決定")
     if plan.method == "hybrid":
         notes.append(
             "倒買票一張就綁住兩趟:第一趟的回程沒搭或取消,同一張票上第二趟的去程會自動失效"

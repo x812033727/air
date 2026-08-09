@@ -262,3 +262,54 @@ class TestRisks:
         wrapper = plan.tickets[0]
         assert wrapper.has_gap is True, "這個測試要的就是有缺口的那張票"
         assert "要自己移動" not in " ".join(risks(plan))
+
+
+class TestTheNamingPeopleActuallyUse:
+    """流通版本用 A 票/B 票、A1/A2/B1/B2 講這件事,使用者是拿著那篇文章來對照的。
+
+    代號是**航段**的屬性,不是某一張票的:哪一段在哪張票上會隨買法變,
+    但「A1 是第一趟的去程」從頭到尾不變。
+    """
+
+    def test_the_two_tickets_are_a_and_b(self):
+        plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
+        wrapper, reverse_ticket = plan.tickets
+        assert (wrapper.code, wrapper.leg_codes) == ("A", ("A1", "A2"))
+        assert (reverse_ticket.code, reverse_ticket.leg_codes) == ("B", ("B1", "B2"))
+
+    def test_a1_is_the_first_trips_outbound_and_a2_the_second_trips_return(self):
+        """照文章的定義:A 票 = 台北起點,拿第一趟的去程與第二趟的回程。"""
+        plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
+        wrapper = plan.tickets[0]
+        assert legs_of(wrapper) == ["TPE→NRT@2026-10-05", "KIX→TPE@2026-12-11"]
+
+    def test_b1_is_the_first_trips_return_and_b2_the_second_trips_outbound(self):
+        plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
+        reverse_ticket = plan.tickets[1]
+        assert legs_of(reverse_ticket) == ["NRT→TPE@2026-10-10", "TPE→KIX@2026-12-06"]
+
+    def test_you_still_fly_out_then_back_on_each_trip(self):
+        """票是交叉的,行程不是。沒有這張對照表,使用者會以為得照票面順序飛 ——
+        先台北→東京、再大阪→台北?那個誤解會直接勸退他。"""
+        plan = plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")
+        assert [(t.label, t.codes) for t in plan.sequence] == [
+            ("東京", ("A1", "B1")),
+            ("大阪", ("B2", "A2")),
+        ]
+
+    def test_the_same_codes_describe_every_buying_method(self):
+        """四種買法用的是同一組四段航程,所以同一段在哪種買法裡都該是同一個代號。
+        否則使用者切換買法比較時,對照表會自己改口。"""
+        plans = build_plans(HOME, TOKYO, OSAKA)
+        by_leg: dict[str, set[str]] = {}
+        for plan in plans:
+            for ticket in plan.tickets:
+                for leg, code in zip(ticket.legs, ticket.leg_codes):
+                    by_leg.setdefault(f"{leg.origin}→{leg.destination}", set()).add(code)
+        assert all(len(codes) == 1 for codes in by_leg.values()), by_leg
+
+    def test_buying_both_at_once_is_stated_as_a_risk(self):
+        """省的錢是用「我確定兩趟都會去」換的。那是一個承諾,不是一個搜尋結果。"""
+        risks_ = " ".join(risks(plan_of(build_plans(HOME, TOKYO, OSAKA), "reverse")))
+        assert "同時買" in risks_
+        assert "廉航" in risks_

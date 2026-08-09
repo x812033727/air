@@ -156,13 +156,34 @@ def google_flights_url(
 # Kayak
 # --------------------------------------------------------------------------
 
-def kayak_url(legs: Sequence[FlightLeg], *, passengers: int = 1, cabin: str = "economy") -> str:
-    """Kayak takes each leg as a plain `ORIGIN-DEST/YYYY-MM-DD` path segment."""
+# Kayak 的繁體中文站是 www.tw.kayak.com,**不是** kayak.com.tw ——
+# 後者對 /flights/... 回 404。實測 tw.kayak.com 的回應裡 `"locale":"zh-tw"`,
+# 而且「篩選」一詞出現 135 次。
+KAYAK_HOST = "https://www.tw.kayak.com"
+
+
+def kayak_url(
+    legs: Sequence[FlightLeg],
+    *,
+    passengers: int = 1,
+    cabin: str = "economy",
+    airlines: Sequence[str] = (),
+) -> str:
+    """Kayak takes each leg as a plain `ORIGIN-DEST/YYYY-MM-DD` path segment.
+
+    航空公司篩選走 `fs=airlines=BR,CI`。這個參數是實測過的:帶了之後,Kayak 自己
+    送回來的頁面裡 `serverRequestState.params.fs` 就是 `"airlines=BR,CI"`,不帶則
+    整份 HTML 找不到 `airlines=`。也就是它真的被收進 Kayak 的查詢狀態,
+    不是被丟掉的網址參數。
+    """
     path = "/".join(f"{leg.origin}-{leg.destination}/{leg.depart_date.isoformat()}" for leg in legs)
     suffix = f"?sort=price_a&travelers={max(1, passengers)}"
     if cabin != "economy":
         suffix += f"&cabin={cabin}"
-    return f"https://www.kayak.com/flights/{path}{suffix}"
+    picked = normalise_airlines(airlines)
+    if picked:
+        suffix += f"&fs=airlines={','.join(picked)}"
+    return f"{KAYAK_HOST}/flights/{path}{suffix}"
 
 
 # --------------------------------------------------------------------------
@@ -193,10 +214,34 @@ def aviasales_url(
 # Assembly
 # --------------------------------------------------------------------------
 
-# 只有 Google Flights 的航空公司篩選是實測過的(在瀏覽器裡勾選再讀回 URL)。
-# Kayak 擋機器人、Aviasales 的參數沒驗過,所以那兩個連結刻意不帶篩選 ——
-# 送出一個沒驗證過的篩選參數,失敗的樣子是「查無班機」,跟真的沒有班機分不開。
-AIRLINE_FILTER_TARGETS = ("google_flights",)
+# 每個出口的實測狀態。放在資料裡而不是散在前端的 if 裡,因為使用者按下去之前
+# 需要知道的就是這兩件事:**它是不是中文、有沒有照我選的航空公司篩**。
+# 「航空公司沒篩選到」正是使用者回報過的問題 —— 當時 Kayak 與 Aviasales 都沒帶
+# 篩選,而畫面上三個按鈕長得一模一樣,看不出差別。
+LINK_INFO = {
+    "google_flights": {
+        "label": "Google Flights",
+        # tfs 帶 hl=zh-TW;航空公司是航段裡的 field 6,瀏覽器實測會顯示
+        # 「長榮航空 +1, 航空公司, 已選取」。
+        "locale": "繁中",
+        "filters_airlines": True,
+    },
+    "kayak": {
+        "label": "Kayak",
+        # www.tw.kayak.com 回應裡 "locale":"zh-tw";fs=airlines= 進得了
+        # serverRequestState.params.fs。
+        "locale": "繁中",
+        "filters_airlines": True,
+    },
+    "aviasales": {
+        "label": "Aviasales",
+        # 這家**沒有中文**:自家 hreflang 只列 en/ru/az/hy/ka/kk/ky/es,
+        # 而 tw.aviasales.com 會轉去俄文站。留著是因為它是我們快取價的同一個來源
+        # (所以報價最接近站內顯示的數字)也是聯盟連結,但要照實標。
+        "locale": "英文",
+        "filters_airlines": False,
+    },
+}
 
 
 def links_for_single_ticket(
@@ -212,7 +257,9 @@ def links_for_single_ticket(
         "google_flights": google_flights_url(
             combo.legs, passengers=passengers, cabin=cabin, airlines=airlines
         ),
-        "kayak": kayak_url(combo.legs, passengers=passengers, cabin=cabin),
+        "kayak": kayak_url(
+            combo.legs, passengers=passengers, cabin=cabin, airlines=airlines
+        ),
         "aviasales": aviasales_url(combo.legs, passengers=passengers, marker=marker),
     }
 
@@ -238,7 +285,9 @@ def links_for_split_tickets(
             "google_flights": google_flights_url(
                 [leg], passengers=passengers, cabin=cabin, airlines=airlines
             ),
-            "kayak": kayak_url([leg], passengers=passengers, cabin=cabin),
+            "kayak": kayak_url(
+                [leg], passengers=passengers, cabin=cabin, airlines=airlines
+            ),
             "aviasales": aviasales_url([leg], passengers=passengers, marker=marker),
         }
         for leg in combo.legs

@@ -429,18 +429,23 @@ class TestAirlinePicker:
         assert "AA" in codes          # 收錄過的照樣在
         assert "2B" not in codes      # 沒收錄的不靠字母序擠進來
 
-    def test_picking_an_airline_only_changes_the_google_link(self, client, priced):
+    def test_picking_an_airline_changes_only_the_verified_links(self, client, priced):
         plain = client.post("/api/search", json=JAPAN_SEARCH).json()["results"][0]
         picked = client.post(
             "/api/search", json={**JAPAN_SEARCH, "airlines": ["BR", "CI"]}
         ).json()["results"][0]
 
         assert picked["split_total"] == plain["split_total"]
-        assert picked["links"]["single_ticket"]["kayak"] == plain["links"]["single_ticket"]["kayak"]
+        # Aviasales 的篩選參數沒驗過,所以那條連結一個字都不該變。
         assert (
-            picked["links"]["single_ticket"]["google_flights"]
-            != plain["links"]["single_ticket"]["google_flights"]
+            picked["links"]["single_ticket"]["aviasales"]
+            == plain["links"]["single_ticket"]["aviasales"]
         )
+        for site in ("google_flights", "kayak"):
+            assert (
+                picked["links"]["single_ticket"][site]
+                != plain["links"]["single_ticket"][site]
+            )
 
     def test_the_filter_reaches_the_per_leg_links_too(self, client, priced):
         """拼票是逐段各買一張。篩選只套到「整趟一張票」那條連結,
@@ -526,3 +531,64 @@ class TestReverseModeExplainsItsGapsToo:
             for ticket in plan["tickets"]:
                 tfs = ticket["links"]["google_flights"].split("tfs=")[1].split("&")[0]
                 assert b"BR" in base64.urlsafe_b64decode(tfs + "=" * (-len(tfs) % 4))
+
+
+class TestTheReverseCardIsNotJustBlank:
+    """畫面上顯示的是「兩張交叉的來回票」,而那種買法**一個數字都沒有** ——
+    兩張都按來回計價,台灣航線沒有來回快取。一張全空的卡片沒有告訴使用者任何事,
+    所以四段的單程價要以參考基準的身分出現(逐段列、不給總和)。"""
+
+    def _reverse_plan(self, client):
+        body = client.post("/api/reverse", json=REVERSE_TRIPS).json()
+        return next(
+            p for p in body["groups"][0]["plans"] if p["method"] == "reverse"
+        )
+
+    def test_the_two_tickets_carry_the_names_the_article_uses(self, client, priced):
+        plan = self._reverse_plan(client)
+        assert [t["code"] for t in plan["tickets"]] == ["A", "B"]
+        assert [leg["code"] for t in plan["tickets"] for leg in t["legs"]] == [
+            "A1", "A2", "B1", "B2"
+        ]
+
+    def test_it_says_which_segments_you_fly_on_which_trip(self, client, priced):
+        """票是交叉的,行程不是。少了這段,使用者會以為得照票面順序飛。"""
+        plan = self._reverse_plan(client)
+        assert [tuple(t["codes"]) for t in plan["sequence"]] == [
+            ("A1", "B1"), ("B2", "A2")
+        ]
+
+    def test_the_four_one_way_prices_come_along_as_a_reference(self, client, priced):
+        plan = self._reverse_plan(client)
+        legs = plan["reference_legs"]
+        assert len(legs) == 4
+        assert {leg["code"] for leg in legs} == {"A1", "A2", "B1", "B2"}
+        assert any(leg["price"] is not None for leg in legs)
+
+    def test_the_reference_never_offers_a_total(self, client, priced):
+        """單程加總看不到來回計價的效果,而且錯的方向剛好讓倒買法看起來更好。
+        給一個總和,使用者一定會拿它當這兩張票的價格。"""
+        plan = self._reverse_plan(client)
+        assert plan["pricing"] is None
+        assert plan["priceable"] is False
+        assert all("total" not in leg for leg in plan["reference_legs"])
+
+    def test_an_unpriced_reference_leg_still_says_why(self, client, priced):
+        """參考基準裡的空格跟別處的空格一樣要有理由 —— 它同樣會被讀成
+        「那天沒有班機」。"""
+        body = client.post(
+            "/api/reverse",
+            json={**REVERSE_TRIPS, "home": ["TPE", "TSA"]},
+        ).json()
+        blanks = [
+            leg
+            for plan in body["groups"][0]["plans"]
+            for leg in plan["reference_legs"]
+            if leg["price"] is None
+        ]
+        assert blanks, "這組固定資料本來就留了查無資料的航段"
+        for leg in blanks:
+            assert leg["gap"]["reason"] in {
+                "not_fetched", "route_empty", "nearby", "far_only"
+            }
+            assert leg["gap"]["text"]

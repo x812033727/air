@@ -172,8 +172,9 @@ def list_airlines(
     復興(GE)與捷星亞洲(3K),卻沒有星宇(JX)跟台灣虎航(IT) —— 一個把
     JX 藏起來、把 GE 端出來的選單,比沒有選單更糟。
 
-    所以選單不受航線限制,而使用者選的東西**只會跟著連結出去**:
-    Google Flights 那邊會真的只列這幾家,站內的排名一個字都不動。
+    所以選單不受航線限制,而使用者選的東西**只會跟著連結出去**:Google Flights
+    與 Kayak 那邊會真的只列這幾家(兩個都實測過),站內的排名一個字都不動。
+    Aviasales 沒有驗過的篩選參數,所以那顆按鈕會照實標成「未篩選」。
 
     沒帶 `q` 時只回收錄過的那幾家。全球有一千多家航空公司,拿字母序去補滿版面
     只會在長榮旁邊放一家「2nd Arkhangelsk United Aviation Division」——
@@ -209,7 +210,7 @@ def list_airlines(
         )[:limit]
     return {
         "airlines": found,
-        "note": "選了只會套用在 Google Flights 連結上,不影響站內排名。",
+        "note": "選了只會套用在 Google Flights 與 Kayak 的連結上,不影響站內排名。",
     }
 
 
@@ -474,6 +475,9 @@ def reverse_plans(
     return {
         "warnings": warnings,
         "currency": settings.default_currency,
+        # 三個出口不一樣,而畫面上它們長得一模一樣。使用者回報過「航空公司沒篩選到」
+        # ——那時候只有 Google Flights 帶篩選,另外兩顆按鈕看不出差別。
+        "link_info": deeplinks.LINK_INFO,
         "months": months,
         "route_pairs": len(pairs),
         "groups": [
@@ -490,6 +494,49 @@ def reverse_plans(
 
 
 REVERSE_GROUP_LIMIT = 12
+
+
+def _reference_legs(plan, lookup, fetched, conn, siblings) -> list[dict[str, Any]]:
+    """四段各自的**單程**快取價,當作參考基準。
+
+    ⚠️ 這**不是**這幾張票的價格,而且**不能加起來當總價** —— 倒買法省錢的機制
+    就是來回計價,單程加總算出來的數字必然看不到那個效果,而且錯的方向剛好會讓
+    倒買法看起來更好。這裡逐段列出、不給總和,就是為了讓它只能被當成基準用:
+    「市價大概這樣,點過去看那兩張票有沒有比這個便宜」。
+    """
+    seen: set[tuple[str, str, str]] = set()
+    out: list[dict[str, Any]] = []
+    for ticket in plan.tickets:
+        for j, leg in enumerate(ticket.legs):
+            key = (leg.origin, leg.destination, leg.depart_date.isoformat())
+            if key in seen:
+                continue
+            seen.add(key)
+            point = lookup.get((leg.origin, leg.destination, leg.depart_date))
+            row: dict[str, Any] = {
+                "code": ticket.leg_codes[j] if j < len(ticket.leg_codes) else "",
+                "origin": leg.origin,
+                "destination": leg.destination,
+                "date": leg.depart_date.isoformat(),
+                "price": point.price if point else None,
+                "age_hours": round(point.age_hours, 1) if point else None,
+            }
+            if point is None and conn is not None:
+                row.update(
+                    gaps.serialise(
+                        cached.explain_gap(
+                            conn,
+                            leg.origin,
+                            leg.destination,
+                            leg.depart_date,
+                            fetched=fetched,
+                            sibling_origins=(siblings or {}).get(leg.origin, ()),
+                            sibling_destinations=(siblings or {}).get(leg.destination, ()),
+                        )
+                    )
+                )
+            out.append(row)
+    return out
 
 
 def _serialise_plan(
@@ -524,10 +571,31 @@ def _serialise_plan(
         "unavailable_reason": plan.unavailable_reason,
         "pricing": pricing,
         "risks": reverse.risks(plan),
+        # 票是交叉的,但**飛的順序是正常的**。沒有這張對照表,使用者看著兩張
+        # 交叉的票會以為自己得照票面順序飛。
+        "sequence": [
+            {
+                "label": trip.label,
+                "depart": trip.depart.isoformat(),
+                "back": trip.back.isoformat(),
+                "codes": list(trip.codes),
+            }
+            for trip in plan.sequence
+        ],
+        # 這種買法一個數字都沒有(兩張都按來回計價,台灣航線沒有來回快取),
+        # 所以把四段各自的單程價當**參考基準**列出來 —— 明說它不是這兩張票的
+        # 價格、也不能加起來當總價。空白的畫面沒有告訴使用者任何事;
+        # 一個標錯的總價則會直接騙他。
+        "reference_legs": _reference_legs(plan, lookup, fetched, conn, siblings)
+        if not plan.priceable
+        else [],
         "tickets": [
             {
                 "label": ticket.label,
                 "role": ticket.role,
+                "code": ticket.code,
+                "note": ticket.note,
+                "leg_codes": list(ticket.leg_codes),
                 "open_jaw": ticket.is_open_jaw,
                 "priceable": ticket.priceable,
                 "pricing": (
@@ -571,8 +639,11 @@ def _serialise_plan(
                         "origin": leg.origin,
                         "destination": leg.destination,
                         "date": leg.depart_date.isoformat(),
+                        "code": (
+                            ticket.leg_codes[j] if j < len(ticket.leg_codes) else ""
+                        ),
                     }
-                    for leg in ticket.legs
+                    for j, leg in enumerate(ticket.legs)
                 ],
                 "links": deeplinks.links_for_single_ticket(
                     ticket.combo,

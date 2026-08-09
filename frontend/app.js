@@ -10,17 +10,12 @@ const API = "";
 const state = {
   countries: [],
   airportsByCountry: new Map(),
-  home: { country: "TW", selected: new Set(["TPE", "TSA"]), label: "台北" },
-  stops: [],
-  lastSearch: null,
   keys: null,
-  // 沒有即時報價來源時,「查即時價」按鈕只會回一句「未接即時報價來源」——
-  // 白費一次點擊,而且旁邊的連結早就在做同一件事。
-  hasLivePricing: false,
-  // 想搭的航空公司(IATA)。兩個模式共用一份,因為使用者對「我只搭長榮」
-  // 這件事的認知不會因為換一個分頁就改變。
+  // 想搭的航空公司(IATA)。
   airlines: new Set(),
   airlineNames: new Map(),
+  // 每個訂票網站的實測狀態(語言、會不會照航空公司篩)。後端給的,前端不猜。
+  linkInfo: {},
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -131,98 +126,6 @@ async function renderPlace(container, place, onChange) {
   container.append(picker);
 }
 
-function nightsRow(stop, onChange) {
-  const row = el("div", "stop__row");
-  row.append(el("span", "hop__label", "停留"));
-
-  const min = el("input");
-  min.type = "number";
-  min.min = "0";
-  min.max = "21";
-  min.value = stop.nights_min;
-  min.style.width = "4rem";
-  min.addEventListener("change", () => {
-    stop.nights_min = Math.max(0, Number(min.value));
-    if (stop.nights_max < stop.nights_min) {
-      stop.nights_max = stop.nights_min;
-    }
-    onChange();
-  });
-
-  const max = el("input");
-  max.type = "number";
-  max.min = "0";
-  max.max = "21";
-  max.value = stop.nights_max;
-  max.style.width = "4rem";
-  max.addEventListener("change", () => {
-    stop.nights_max = Math.max(stop.nights_min, Number(max.value));
-    onChange();
-  });
-
-  row.append(min, el("span", null, "到"), max, el("span", null, "晚"));
-  return row;
-}
-
-function hopRow(index, onChange) {
-  const hop = el("div", "hop");
-  hop.append(el("span", "hop__label", "去下一站"));
-
-  for (const [value, text] of [["surface", "自己走"], ["fly", "搭飛機"]]) {
-    const button = el("button", "chip", text);
-    button.type = "button";
-    button.setAttribute("aria-pressed", String(state.stops[index].hop === value));
-    button.addEventListener("click", () => {
-      state.stops[index].hop = value;
-      onChange();
-    });
-    hop.append(button);
-  }
-  return hop;
-}
-
-async function renderPlan() {
-  const chain = $("#stopchain");
-  chain.replaceChildren();
-
-  const origin = el("div", "stop");
-  origin.append(el("div", "stop__role", "出發"));
-  const originBody = el("div", "stop__body");
-  origin.append(originBody);
-  chain.append(origin);
-  await renderPlace(originBody, state.home, renderPlan);
-
-  for (const [index, stop] of state.stops.entries()) {
-    const node = el("div", "stop");
-    node.append(el("div", "stop__role", `停留 ${index + 1}`));
-    const body = el("div", "stop__body");
-    node.append(body);
-    chain.append(node);
-
-    await renderPlace(body, stop, renderPlan);
-    body.append(nightsRow(stop, renderPlan));
-
-    if (state.stops.length > 1) {
-      const remove = el("button", "stop__remove", "移除這站");
-      remove.type = "button";
-      remove.addEventListener("click", () => {
-        state.stops.splice(index, 1);
-        renderPlan();
-      });
-      body.querySelector(".stop__row").append(remove);
-    }
-
-    if (index < state.stops.length - 1) chain.append(hopRow(index, renderPlan));
-  }
-
-  const home = el("div", "stop");
-  home.append(el("div", "stop__role", "回到"));
-  home.append(el("div", "stop__body", state.home.label));
-  chain.append(home);
-
-  updateCostHint();
-}
-
 /* --------------------------------------------------------------- results */
 
 /* Intl 在 zh-TW 底下把 TWD 印成單純的 "$",跟美元長得一模一樣。票價旁邊
@@ -234,109 +137,6 @@ const money = (value, currency) =>
     ? null
     : (SYMBOLS[currency] || `${currency} `) +
       new Intl.NumberFormat("zh-TW", { maximumFractionDigits: 0 }).format(value);
-
-function freshness(hours) {
-  if (hours == null) return "";
-  if (hours < 1) return "剛剛抓的";
-  if (hours < 24) return `${Math.round(hours)} 小時前`;
-  return `${Math.round(hours / 24)} 天前`;
-}
-
-/** The signature element: solid where you fly, dashed where you don't. */
-function routeLine(combo) {
-  const wrap = el("div", "card__route");
-  const line = el("div", "routeline");
-  const labels = el("div", "legs");
-
-  const stops = [];
-  combo.legs.forEach((leg, index) => {
-    if (index > 0) {
-      const previous = combo.legs[index - 1];
-      // A gap between two legs means the traveller got themselves there.
-      if (previous.destination !== leg.origin) {
-        stops.push({ code: previous.destination, place: previous.to_label, date: null });
-        stops.push({ code: leg.origin, place: leg.from_label, date: leg.date, surfaceBefore: true });
-      } else {
-        stops.push({ code: leg.origin, place: leg.from_label, date: leg.date });
-      }
-    } else {
-      stops.push({ code: leg.origin, place: leg.from_label, date: leg.date });
-    }
-    if (index === combo.legs.length - 1) {
-      stops.push({ code: leg.destination, place: leg.to_label, date: null });
-    }
-  });
-
-  stops.forEach((stop, index) => {
-    if (index > 0) {
-      const seg = el("span", stop.surfaceBefore ? "seg seg--surface" : "seg seg--fly");
-      seg.append(el("span", "seg__glyph", stop.surfaceBefore ? "陸路" : "✈"));
-      line.append(seg);
-    }
-    line.append(el("span", "node"));
-
-    const label = el("div", "legs__stop");
-    label.append(el("div", "legs__code", stop.code));
-    label.append(el("div", "legs__place", stop.place));
-    if (stop.date) label.append(el("div", "legs__date", stop.date.slice(5)));
-    labels.append(label);
-  });
-
-  wrap.append(line, labels);
-  return wrap;
-}
-
-function priceBlock(combo, currency) {
-  const box = el("div");
-  const total = money(combo.split_total, currency);
-
-  if (total) {
-    const price = el("div", "card__price", total);
-    box.append(price);
-    const stamp = el("span", "stamp", `快取・${freshness(oldestAge(combo))}`);
-    box.append(stamp);
-  } else {
-    // 沒有價格的地方一定要說原因,否則會被讀成「這個組合很貴」。
-    const missing = combo.legs.filter((leg) => leg.status !== "ok");
-    const asked = missing.some((leg) => leg.status === "no_data");
-    box.append(
-      el(
-        "div",
-        "card__price card__price--none",
-        asked ? "此航段查無資料" : "尚未查價"
-      )
-    );
-    box.append(
-      el(
-        "span",
-        "stamp stamp--none",
-        missing.map((leg) => `${leg.origin}→${leg.destination}`).join(" / ")
-      )
-    );
-    // 「這天查無資料」會被讀成「那天沒有飛機」。實際上多半是這條航線只有少數
-    // 幾天被人搜過 —— 那些日子就在同一批抓回來的資料裡,講出來就變成下一步。
-    for (const leg of missing) {
-      box.append(
-        gapDetail(leg.gap, leg.alternatives, currency, `${leg.origin}→${leg.destination}`)
-      );
-    }
-  }
-
-  // 比基準貴也要講。只在省錢時才顯示,等於把不利的比較悄悄藏起來。
-  const delta = combo.savings_vs_baseline;
-  if (delta != null && Math.round(delta) !== 0) {
-    box.append(
-      el(
-        "div",
-        delta > 0 ? "card__saving" : "card__saving card__saving--worse",
-        delta > 0
-          ? `比單城來回省 ${money(delta, currency)}`
-          : `比單城來回貴 ${money(-delta, currency)}`
-      )
-    );
-  }
-  return box;
-}
 
 /** 一個沒有價格的航段,為什麼沒有 —— 以及下一步是什麼。
  *
@@ -382,157 +182,6 @@ function gapDetail(gap, alternatives, currency, label) {
   return box;
 }
 
-/** 航線上有誰飛。結果畫出來之後才去問,因為這是加值資訊,不該拖慢查價那條主線。
- *  ⚠️ 這不是「那個價格是誰飛的」—— 排名用的資料根本沒有航空公司欄位。 */
-async function annotateAirlines(combos) {
-  const pairs = [...new Set(
-    combos.flatMap((c) => c.legs.map((l) => `${l.origin}-${l.destination}`))
-  )].slice(0, 40);
-  if (!pairs.length) return;
-
-  let routes;
-  try {
-    ({ routes } = await api(`/api/routes/airlines?pairs=${pairs.join(",")}`));
-  } catch {
-    return;  // 純加值,拿不到就算了,不打擾使用者
-  }
-
-  for (const node of document.querySelectorAll("[data-route]")) {
-    const carriers = routes[node.dataset.route] || [];
-    if (!carriers.length) continue;
-    node.replaceChildren();
-    // 一張卡上有兩三段,標籤不帶航線代碼的話兩行長得一模一樣。
-    node.append(el("span", "alts__label", `${node.dataset.route} 有誰飛`));
-    for (const carrier of carriers) {
-      const chip = el("span", "alts__day", carrier.name);
-      chip.title = carrier.code;
-      node.append(chip);
-    }
-  }
-}
-
-function oldestAge(combo) {
-  const ages = combo.legs.map((leg) => leg.age_hours).filter((age) => age != null);
-  return ages.length ? Math.max(...ages) : null;
-}
-
-function linkRow(label, links, extra) {
-  const row = el("div", "card__actions");
-  row.append(el("span", "label", label));
-  for (const [name, href] of Object.entries(links)) {
-    if (!href.startsWith("http")) continue;
-    const link = el("a", "chip", { google_flights: "Google Flights", kayak: "Kayak", aviasales: "Aviasales" }[name] || name);
-    link.href = href;
-    link.target = "_blank";
-    link.rel = "noopener";
-    row.append(link);
-  }
-  if (extra) row.append(extra);
-  return row;
-}
-
-function resultCard(combo, index, currency, options = {}) {
-  const card = el("li", `card${index === 0 && !options.muted ? " card--best" : ""}`);
-
-  const top = el("div", "card__top");
-  top.append(el("div", "card__rank", options.muted ? combo.shape : `#${index + 1} ${combo.shape}`));
-  top.append(priceBlock(combo, currency));
-  card.append(top);
-
-  card.append(routeLine(combo));
-
-  if (combo.risks?.length) {
-    const risks = el("ul", "card__risks");
-    for (const risk of combo.risks) risks.append(el("li", null, risk));
-    card.append(risks);
-  }
-
-  // 每段留一個空槽,結果畫出來之後再由 annotateAirlines 填上「這條線有誰飛」。
-  for (const leg of combo.legs) {
-    const slot = el("div", "alts");
-    slot.dataset.route = `${leg.origin}-${leg.destination}`;
-    card.append(slot);
-  }
-
-  card.append(
-    linkRow(
-      "整趟一張票",
-      combo.links.single_ticket,
-      state.hasLivePricing ? verifyButton(combo, currency) : null
-    )
-  );
-
-  const splitRow = el("div", "card__actions");
-  splitRow.append(el("span", "label", "分段拼票"));
-  for (const leg of combo.links.split) {
-    const link = el("a", "chip", `${leg.leg} ${leg.date.slice(5)}`);
-    link.href = leg.google_flights;
-    link.target = "_blank";
-    link.rel = "noopener";
-    splitRow.append(link);
-  }
-  card.append(splitRow);
-
-  return card;
-}
-
-/** 即時實價:同一個行程,拼票買法與一張票買法並排。 */
-function verifyButton(combo, currency) {
-  const button = el("button", "chip", "查即時價");
-  button.type = "button";
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    button.textContent = "查詢中…";
-    try {
-      const body = await api("/api/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          legs: combo.legs.map((leg) => ({
-            origin: leg.origin,
-            destination: leg.destination,
-            date: leg.date,
-          })),
-          passengers: Number($("#passengers").value) || 1,
-          cabin: $("#cabin").value,
-        }),
-      });
-      button.replaceWith(verdictBox(body));
-    } catch (error) {
-      button.disabled = false;
-      button.textContent = "查即時價";
-      showNotice("即時查價沒有成功", error.message, "alert");
-    }
-  });
-  return button;
-}
-
-function verdictBox(body) {
-  const box = el("div", "verdict");
-  const single = body.single_ticket;
-  const split = body.split_tickets;
-
-  const cheaperIsSplit =
-    single.total != null && split.total != null ? split.total < single.total : null;
-
-  for (const [label, quote, wins] of [
-    ["一張票", single, cheaperIsSplit === false],
-    ["分段拼票", split, cheaperIsSplit === true],
-  ]) {
-    const row = el("div", "verdict__row");
-    row.append(el("span", null, label));
-    row.append(
-      el(
-        "span",
-        wins ? "verdict__win" : null,
-        quote.total != null ? money(quote.total, quote.currency) : quote.unavailable_reason
-      )
-    );
-    box.append(row);
-  }
-  return box;
-}
-
 /* --------------------------------------------------------------- notices */
 
 const shownNotices = new Set();
@@ -558,130 +207,7 @@ function topicOf(warning) {
   return warning;
 }
 
-/* ---------------------------------------------------------------- search */
-
-function payload() {
-  return {
-    home: [...state.home.selected],
-    stops: state.stops.map((stop) => ({
-      codes: [...stop.selected],
-      nights_min: stop.nights_min,
-      nights_max: stop.nights_max,
-      label: stop.label,
-    })),
-    depart_earliest: $("#depart-earliest").value,
-    depart_latest: $("#depart-latest").value,
-    try_both_orders: $("#both-orders").checked,
-    internal_links:
-      state.stops.length > 1 ? state.stops.slice(0, -1).map((s) => s.hop) : null,
-    passengers: Number($("#passengers").value) || 1,
-    cabin: $("#cabin").value,
-    airlines: [...state.airlines],
-  };
-}
-
-function updateCostHint() {
-  const airports =
-    state.home.selected.size +
-    state.stops.reduce((sum, stop) => sum + stop.selected.size, 0);
-  $("#cost-hint").textContent = airports
-    ? `已選 ${airports} 個機場`
-    : "還沒選機場";
-}
-
-function renderList(sectionId, listId, combos, currency, options) {
-  const section = $(sectionId);
-  const list = $(listId);
-  list.replaceChildren();
-  if (!combos.length) {
-    section.hidden = true;
-    return;
-  }
-  combos.forEach((combo, index) => list.append(resultCard(combo, index, currency, options)));
-  section.hidden = false;
-}
-
-async function runSearch(event) {
-  event.preventDefault();
-  const button = $("#submit");
-  $("#notices").replaceChildren();
-  shownNotices.clear();
-
-  if (!state.home.selected.size || state.stops.some((s) => !s.selected.size)) {
-    showNotice("還有地方沒選", "每一站都要至少選一個機場,才知道要查哪條航線。", "alert");
-    return;
-  }
-
-  button.disabled = true;
-  const body = payload();
-
-  try {
-    button.textContent = "抓價中…";
-    const warmed = await api("/api/search/warm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    for (const warning of warmed.warnings || []) {
-      showNotice("沒有價格資料", warning, "alert", topicOf(warning));
-    }
-
-    button.textContent = "排名中…";
-    const result = await api("/api/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    state.lastSearch = result;
-
-    for (const warning of result.warnings || []) {
-      showNotice("注意", warning, "alert", topicOf(warning));
-    }
-
-    const { counts, currency } = result;
-    // 「顯示最便宜的 0」讀起來像壞掉了。沒有價格時要說清楚是沒有價格。
-    $("#results-summary").textContent = counts.shown
-      ? `${counts.combinations.toLocaleString()} 種組合 · ` +
-        `${result.cost.api_calls} 次查價 · 顯示最便宜的 ${counts.shown}`
-      : `${counts.combinations.toLocaleString()} 種組合,但目前沒有價格可以排名。` +
-        `下面列出組合本身,票價請用每列的連結查。`;
-    $("#gaps-summary").textContent =
-      `共 ${counts.unpriceable.toLocaleString()} 種組合缺價格,以下是其中幾種。` +
-      `缺資料不代表不便宜 —— 只代表沒有人搜過這條航線。`;
-
-    renderList("#results", "#result-list", result.results, currency, {});
-    if (!result.results.length && result.unpriceable.length) {
-      // 有組合、只是沒有價格 —— 讓標題與說明留在畫面上,否則使用者只會看到
-      // 一個叫「查無資料」的區塊,像是什麼都沒找到。
-      $("#results").hidden = false;
-    }
-    renderList("#baselines", "#baseline-list", result.baselines, currency, { muted: true });
-    renderList("#gaps", "#gap-list", result.unpriceable, currency, { muted: true });
-
-    if (!result.results.length && !result.unpriceable.length) {
-      showNotice("沒有可行的組合", "試著放寬日期區間,或多選幾個機場。", "info");
-    }
-    $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
-    annotateAirlines([...result.results, ...result.unpriceable]);
-  } catch (error) {
-    showNotice("搜尋沒有成功", error.message, "alert");
-  } finally {
-    button.disabled = false;
-    button.textContent = "找組合";
-  }
-}
-
 /* ------------------------------------------------------------------ init */
-
-function defaultDates() {
-  const start = new Date();
-  start.setDate(start.getDate() + 60);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  const iso = (date) => date.toISOString().slice(0, 10);
-  $("#depart-earliest").value = iso(start);
-  $("#depart-latest").value = iso(end);
-}
 
 async function loadStatus() {
   try {
@@ -689,7 +215,6 @@ async function loadStatus() {
     const strip = $("#status-strip");
     strip.replaceChildren();
 
-    state.hasLivePricing = health.config.live_provider !== "deeplink";
     const pricing = health.config.cached_prices;
     const chip = el(
       "span",
@@ -710,8 +235,8 @@ async function loadStatus() {
     if (!pricing) {
       showNotice(
         "還沒有價格",
-        "打開上方的「查價金鑰」填入 Travelpayouts token,就能自動比價排名。" +
-          "在那之前站台仍會列出所有可行的行程組合,每一列都有連結可以直接去看真價。",
+        "打開上方的「查價金鑰」填入 Travelpayouts token,四段航程才會有參考價。" +
+          "在那之前站台照樣組得出票,每一張都有連結可以直接去看真價。",
         "info",
         "no-token"
       );
@@ -785,7 +310,7 @@ function wireKeyPanel() {
       await loadStatus();
       if (token) {
         $("#keys").open = false;
-        showNotice("金鑰已儲存", "再按一次「找組合」就會帶著它去查價。", "info", "keys-saved");
+        showNotice("金鑰已儲存", "再按一次「組票」就會帶著它去查價。", "info", "keys-saved");
       }
     } catch (error) {
       $("#key-state").className = "keys__state keys__state--bad";
@@ -855,10 +380,10 @@ function airlineChip(airline) {
     paint();
     renderAirlineCount();
     // 已經有結果在畫面上時,連結是舊的 —— 講出來,不要讓使用者以為改完就生效了。
-    if ($("#results").hidden === false || $("#reverse-results").hidden === false) {
+    if ($("#reverse-results").hidden === false) {
       showNotice(
         "航空公司改了",
-        "已經在畫面上的連結還是舊的。再按一次「找組合」或「組票」就會套用。",
+        "已經在畫面上的連結還是舊的。再按一次「組票」就會套用。",
         "info",
         "airlines-restale"
       );
@@ -915,54 +440,6 @@ async function wireAirlinePanel() {
   });
   renderAirlineCount();
 }
-
-function newStop(country) {
-  return { country, selected: new Set(), nights_min: 3, nights_max: 4, hop: "surface", label: "" };
-}
-
-async function init() {
-  defaultDates();
-  const body = await api("/api/ref/countries");
-  state.countries = body.countries;
-
-  // 預設就是這個專案的驗證行程:台北 → 日本兩城開口。
-  const japan = newStop("JP");
-  const japan2 = newStop("JP");
-  state.stops = [japan, japan2];
-
-  const jpCities = await airportsFor("JP");
-  const tokyo = jpCities.find((c) => c.code === "TYO");
-  const osaka = jpCities.find((c) => c.code === "OSA");
-  if (tokyo) {
-    tokyo.airports.forEach((a) => japan.selected.add(a.code));
-    japan.label = tokyo.name;
-  }
-  if (osaka) {
-    osaka.airports.forEach((a) => japan2.selected.add(a.code));
-    japan2.label = osaka.name;
-    japan2.nights_min = 2;
-    japan2.nights_max = 3;
-  }
-
-  wireKeyPanel();
-  wirePasswordPanel();
-  wireAirlinePanel();
-  await migrateLegacyKeys();
-  await renderKeyState();
-  await renderPlan();
-  $("#plan").addEventListener("submit", runSearch);
-  $("#add-stop").addEventListener("click", () => {
-    if (state.stops.length >= 3) {
-      showNotice("停留點滿了", "最多支援 3 個停留點,再多組合會多到查不動。", "info");
-      return;
-    }
-    state.stops.push(newStop(state.stops.at(-1)?.country || "JP"));
-    renderPlan();
-  });
-  loadStatus();
-}
-
-init().catch((error) => showNotice("啟動失敗", error.message, "alert"));
 
 /* ==========================================================================
  * 倒買法:兩趟旅行交叉綁票
@@ -1027,12 +504,16 @@ function ticketRow(ticket, currency) {
   const row = el("div", "ticket");
 
   const role = el("div", "ticket__role");
+  // 「A 票 / B 票」是流通版本的講法,「包覆票 / 倒買票」說的是它為什麼長這樣。
+  // 兩個都留:前者讓人對得上別人講的,後者讓人知道哪一張是省錢的那張。
+  if (ticket.code) role.append(el("b", "ticket__code", `${ticket.code} 票`));
   role.append(el("b", null, ticket.role));
   if (ticket.open_jaw) role.append(document.createTextNode("開口"));
   if (ticket.pricing) {
     role.append(el("div", "ticket__price",
       ticket.pricing.total != null ? money(ticket.pricing.total, currency) : "查無資料"));
   }
+  if (ticket.note) role.append(el("div", "ticket__note", ticket.note));
   row.append(role);
 
   const body = el("div", "ticket__body");
@@ -1044,11 +525,11 @@ function ticketRow(ticket, currency) {
     if (i > 0 && ticket.legs[i - 1].destination !== leg.origin) {
       // 票上的缺口。這裡**不**寫「自己走」—— 倒買法的缺口是另一張票飛掉的。
       stops.push({ code: ticket.legs[i - 1].destination, date: null, gapBefore: false });
-      stops.push({ code: leg.origin, date: leg.date, gapBefore: true });
+      stops.push({ code: leg.origin, date: leg.date, gapBefore: true, tag: leg.code });
     } else if (i > 0) {
-      stops.push({ code: leg.origin, date: leg.date });
+      stops.push({ code: leg.origin, date: leg.date, tag: leg.code });
     } else {
-      stops.push({ code: leg.origin, date: leg.date });
+      stops.push({ code: leg.origin, date: leg.date, tag: leg.code });
     }
     if (i === ticket.legs.length - 1) {
       stops.push({ code: leg.destination, date: null });
@@ -1063,6 +544,8 @@ function ticketRow(ticket, currency) {
     }
     line.append(el("span", "node"));
     const label = el("div", "legs__stop");
+    // 代號掛在那一段的**起點**上,因為 A1 指的是一段航程,不是一個機場。
+    if (stop.tag) label.append(el("div", "legs__tag", stop.tag));
     label.append(el("div", "legs__code", stop.code));
     if (stop.date) label.append(el("div", "legs__date", stop.date.slice(5)));
     labels.append(label);
@@ -1076,19 +559,101 @@ function ticketRow(ticket, currency) {
     body.append(gapDetail(alt.gap, alt.alternatives, currency, alt.leg));
   }
 
-  const links = el("div", "ticket__links");
-  for (const [name, href] of Object.entries(ticket.links)) {
-    const link = el("a", "chip",
-      { google_flights: "Google Flights", kayak: "Kayak", aviasales: "Aviasales" }[name] || name);
-    link.href = href;
-    link.target = "_blank";
-    link.rel = "noopener";
-    links.append(link);
-  }
-  body.append(links);
+  body.append(linkChips(ticket.links));
 
   row.append(body);
   return row;
+}
+
+/** 三個出口,三種不同的東西 —— 而它們在畫面上長得一模一樣。
+ *
+ *  使用者回報過「航空公司沒篩選到」:當時只有 Google Flights 帶篩選,按下 Kayak
+ *  或 Aviasales 看到的是全部航空公司,而按鈕上完全看不出差別。現在每顆按鈕直接
+ *  標出它是什麼語言、有沒有照選的航空公司篩。
+ *
+ *  這些狀態全部來自後端的實測結果(`deeplinks.LINK_INFO`),不是前端猜的。 */
+function linkChips(links) {
+  const row = el("div", "ticket__links");
+  const picked = state.airlines.size > 0;
+  for (const [name, href] of Object.entries(links)) {
+    const info = state.linkInfo[name] || {};
+    const link = el("a", "chip chip--link");
+    link.append(el("span", null, info.label || name));
+
+    const tags = [];
+    if (info.locale) tags.push(info.locale);
+    // 只在真的選了航空公司的時候才標篩選狀態 —— 沒選的時候「未篩選」
+    // 是廢話,而廢話會把真正重要的那一個字淹掉。
+    if (picked) tags.push(info.filters_airlines ? "已篩選" : "未篩選");
+    if (tags.length) {
+      const tag = el("span",
+        `chip__tag${picked && !info.filters_airlines ? " chip__tag--warn" : ""}`,
+        tags.join("・"));
+      link.append(tag);
+    }
+
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noopener";
+    if (picked && !info.filters_airlines) {
+      link.title = "這個網站的篩選參數我們沒有驗證過,寧可不帶 —— " +
+                   "帶錯的話它會回一張空清單,而空清單長得就像「那天沒有班機」。";
+    }
+    row.append(link);
+  }
+  return row;
+}
+
+/** 怎麼飛。票是交叉的,行程不是 —— 每一趟照樣是去了再回來。
+ *
+ *  這是倒買法唯一真正難懂的地方。兩張交叉的票畫在那裡,不寫這段,使用者會以為
+ *  自己得照票面順序飛(先台北→福岡,再沖繩→台北?),那個誤解會直接勸退他。 */
+function sequenceBlock(plan) {
+  if (!plan.sequence?.length) return null;
+  const box = el("div", "sequence");
+  box.append(el("div", "sequence__title", "怎麼飛"));
+  for (const trip of plan.sequence) {
+    const row = el("div", "sequence__trip");
+    row.append(el("span", "sequence__when",
+      `${trip.label} ${trip.depart.slice(5)}–${trip.back.slice(5)}`));
+    row.append(el("span", "sequence__codes", trip.codes.join(" → ")));
+    box.append(row);
+  }
+  return box;
+}
+
+/** 四段各自的單程價,當參考基準。
+ *
+ *  ⚠️ 逐段列、**不給總和**,而那不是偷懶:倒買法省錢的機制就是來回計價,
+ *  單程加總必然看不到那個效果,而且錯的方向剛好會讓倒買法看起來更好。
+ *  這裡要回答的是「市價大概這樣」,不是「這兩張票多少錢」。 */
+function referenceBlock(legs, currency) {
+  if (!legs?.length) return null;
+  const box = el("div", "reference");
+  box.append(
+    el("div", "reference__title", "參考:同樣這四段,各自買單程要多少")
+  );
+  box.append(
+    el("div", "reference__note",
+       "這不是上面那兩張票的價格,也不能加起來當總價 —— " +
+       "倒買法省的就是來回計價,單程加總看不到那個效果。點過去比比看那兩張票有沒有更便宜。")
+  );
+  for (const leg of legs) {
+    const row = el("div", "reference__row");
+    row.append(el("span", "reference__code", leg.code || ""));
+    row.append(el("span", "reference__leg",
+      `${leg.origin}→${leg.destination} ${leg.date.slice(5)}`));
+    row.append(
+      el("span", leg.price != null ? "reference__price" : "reference__price reference__price--none",
+         leg.price != null ? money(leg.price, currency) : "查無資料")
+    );
+    box.append(row);
+    if (leg.price == null) {
+      box.append(gapDetail(leg.gap, leg.alternatives, currency,
+                           `${leg.origin}→${leg.destination}`));
+    }
+  }
+  return box;
 }
 
 function methodCard(plan, currency) {
@@ -1112,12 +677,18 @@ function methodCard(plan, currency) {
 
   for (const ticket of plan.tickets) card.append(ticketRow(ticket, currency));
 
+  const order = sequenceBlock(plan);
+  if (order) card.append(order);
+
   if (plan.risks?.length) {
     const risks = el("ul", "card__risks");
     risks.style.marginTop = "0.8rem";
     for (const risk of plan.risks) risks.append(el("li", null, risk));
     card.append(risks);
   }
+
+  const reference = referenceBlock(plan.reference_legs, currency);
+  if (reference) card.append(reference);
   return card;
 }
 
@@ -1156,13 +727,15 @@ async function runReverse(event) {
       }),
     });
 
+    state.linkInfo = body.link_info || {};
+
     for (const warning of body.warnings || []) {
       showNotice("注意", warning, "alert", topicOf(warning));
     }
 
-    // 只顯示「單程＋反向」。其餘三種後端照樣算、測試照樣守著,
-    // 想拿回來比較時只要改這一行。
-    const plans = body.groups[0].plans.filter((plan) => plan.method === "hybrid");
+    // 只顯示「反向機票:兩張交叉的來回票」—— 流通版本講的就是這一種。
+    // 其餘三種後端照樣算、測試照樣守著,想拿回來比較時只要改這一行。
+    const plans = body.groups[0].plans.filter((plan) => plan.method === "reverse");
 
     const list = $("#rev-list");
     list.replaceChildren();
@@ -1170,7 +743,8 @@ async function runReverse(event) {
 
     $("#rev-summary").textContent =
       `${body.route_pairs} 條航線 · ${body.months.join("、")} · ` +
-      `這裡只給單程段的快取價,總價請用每張票的連結各自查再比。`;
+      `這兩張票都按來回計價,而台灣出發的航線沒有來回快取資料,所以站內不比價 —— ` +
+      `價格請用每張票的連結各自查,下面的單程價只是參考基準。`;
     $("#reverse-results").hidden = false;
     $("#reverse-results").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
@@ -1179,26 +753,6 @@ async function runReverse(event) {
     button.disabled = false;
     button.textContent = "組票";
   }
-}
-
-function wireModes() {
-  const tabs = { single: $("#mode-single"), reverse: $("#mode-reverse") };
-  const show = (mode) => {
-    for (const [name, tab] of Object.entries(tabs)) {
-      tab.setAttribute("aria-selected", String(name === mode));
-    }
-    $("#single-panel").hidden = mode !== "single";
-    $("#reverse-panel").hidden = mode !== "reverse";
-    for (const id of ["#results", "#baselines", "#gaps"]) {
-      if (mode !== "single") $(id).hidden = true;
-    }
-    if (mode !== "reverse") $("#reverse-results").hidden = true;
-  };
-  tabs.single.addEventListener("click", () => show("single"));
-  tabs.reverse.addEventListener("click", async () => {
-    show("reverse");
-    if (!$("#reverse-chain").children.length) await initReverse();
-  });
 }
 
 async function initReverse() {
@@ -1225,4 +779,17 @@ async function initReverse() {
   $("#reverse-form").addEventListener("submit", runReverse);
 }
 
-wireModes();
+async function init() {
+  const body = await api("/api/ref/countries");
+  state.countries = body.countries;
+
+  wireKeyPanel();
+  wirePasswordPanel();
+  wireAirlinePanel();
+  await migrateLegacyKeys();
+  await renderKeyState();
+  await initReverse();
+  loadStatus();
+}
+
+init().catch((error) => showNotice("啟動失敗", error.message, "alert"));

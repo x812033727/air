@@ -82,7 +82,7 @@ class TestKayak:
     def test_each_leg_becomes_a_path_segment(self):
         url = deeplinks.kayak_url([OUTBOUND, INBOUND])
         assert url.startswith(
-            "https://www.kayak.com/flights/TPE-NRT/2026-10-05/ITM-TPE/2026-10-11"
+            "https://www.tw.kayak.com/flights/TPE-NRT/2026-10-05/ITM-TPE/2026-10-11"
         )
 
     def test_cheapest_first(self):
@@ -164,11 +164,34 @@ class TestAirlineFilter:
         「那天沒有班機」—— 正好是這次改動要消滅的那句誤導。"""
         assert deeplinks.normalise_airlines(["br", "BR", "", "LONG", "C I", None]) == ("BR",)
 
-    def test_the_other_two_sites_are_left_unfiltered(self):
-        """Kayak 擋機器人、Aviasales 的參數沒驗過。送一個沒驗證過的篩選參數出去,
-        壞掉的樣子跟「真的沒有班機」分不開,所以寧可不帶。"""
+    def test_kayak_gets_the_filter_too(self):
+        """實測:帶了 `fs=airlines=BR,CI` 之後,Kayak 送回來的頁面裡
+        `serverRequestState.params.fs` 就是那個值;不帶則整份 HTML 找不到
+        `airlines=`。它真的進了 Kayak 的查詢狀態,不是被丟掉的網址參數。"""
+        url = deeplinks.kayak_url([OUTBOUND, INBOUND], airlines=["BR", "CI"])
+        assert "fs=airlines=BR,CI" in url
+
+    def test_kayak_stays_clean_when_nobody_is_picked(self):
+        assert "fs=" not in deeplinks.kayak_url([OUTBOUND, INBOUND])
+
+    def test_aviasales_is_left_unfiltered_and_says_so(self):
+        """Aviasales 的篩選參數沒驗過。送一個沒驗證過的參數出去,壞掉的樣子跟
+        「真的沒有班機」分不開 —— 所以寧可不帶,而且要在按鈕上標出來,
+        否則使用者按下去只會覺得篩選壞了(他真的回報過)。"""
         combo = Combo(legs=(OUTBOUND, INBOUND), shape_label="x", is_baseline=False)
         links = deeplinks.links_for_single_ticket(combo, airlines=["BR"])
-        assert "BR" not in links["kayak"]
         assert "BR" not in links["aviasales"]
+        assert deeplinks.LINK_INFO["aviasales"]["filters_airlines"] is False
         assert b"BR" in decode(links["google_flights"])
+        assert "BR" in links["kayak"]
+
+    def test_every_link_declares_its_language_and_filter_state(self):
+        """三顆按鈕長得一模一樣,差別必須寫在上面。這份對照表是實測結果:
+        Aviasales 自家 hreflang 只列 en/ru/az/hy/ka/kk/ky/es,沒有中文。"""
+        assert set(deeplinks.LINK_INFO) == {"google_flights", "kayak", "aviasales"}
+        for name, info in deeplinks.LINK_INFO.items():
+            assert info["label"] and info["locale"]
+            assert isinstance(info["filters_airlines"], bool)
+        assert deeplinks.LINK_INFO["google_flights"]["locale"] == "繁中"
+        assert deeplinks.LINK_INFO["kayak"]["locale"] == "繁中"
+        assert deeplinks.LINK_INFO["aviasales"]["locale"] == "英文"

@@ -307,32 +307,6 @@ main {
   min-width: 0;
 }
 
-.stop__remove {
-  margin-left: auto;
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  color: var(--ink-faint);
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 0.2rem 0.35rem;
-}
-
-.stop__remove:hover { color: var(--boundary); }
-
-/* The gap between two stops: fly it, or get yourself there. */
-.hop {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0 0.35rem 5.5rem;
-  font-size: 0.85rem;
-  color: var(--ink-soft);
-}
-
-.hop__label { font-family: var(--mono); font-size: 0.72rem; letter-spacing: 0.08em; }
-
 /* ---- Chips ------------------------------------------------------------ */
 
 .chip {
@@ -359,6 +333,20 @@ main {
   color: var(--airway);
   font-weight: 600;
 }
+
+/* 訂票網站的按鈕帶一個小標,說它是什麼語言、有沒有照選的航空公司篩。 */
+.chip--link { gap: 0.4rem; }
+
+.chip__tag {
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  border-left: 1px solid var(--rule);
+  padding-left: 0.4rem;
+}
+
+/* 「未篩選」要看得出來 —— 那正是使用者按下去之後會覺得壞掉的那一顆。 */
+.chip__tag--warn { color: var(--boundary); border-left-color: var(--boundary); }
 
 .chip--quiet { cursor: default; border-style: dashed; }
 .chip--quiet:hover { border-color: var(--rule-strong); color: var(--ink-soft); }
@@ -454,15 +442,6 @@ a:focus-visible {
   color: var(--ink-faint);
 }
 
-.switch {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.85rem;
-  color: var(--ink-soft);
-  padding-bottom: 0.4rem;
-}
-
 .btn {
   font-family: var(--mono);
   font-size: 0.8rem;
@@ -535,7 +514,6 @@ a:focus-visible {
 /* ---- Results ---------------------------------------------------------- */
 
 .results { margin-top: 2.5rem; }
-.results--muted { opacity: 0.92; }
 
 .results__head { margin-bottom: 1rem; }
 
@@ -545,56 +523,6 @@ a:focus-visible {
   color: var(--ink-soft);
   max-width: 46rem;
 }
-
-.cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
-
-.card {
-  background: var(--paper);
-  border: 1px solid var(--rule);
-  border-radius: var(--radius);
-  padding: 1.1rem 1.25rem;
-  display: grid;
-  gap: 0.9rem;
-}
-
-.card--best { border-color: var(--airway); border-left-width: 3px; }
-
-.card__top {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.25rem;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.card__rank {
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
-  color: var(--ink-faint);
-}
-
-.card__price {
-  font-family: var(--mono);
-  font-size: 1.3rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-}
-
-.card__price--none { font-size: 0.85rem; font-weight: 400; color: var(--boundary); }
-
-.card__saving {
-  font-family: var(--mono);
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--airway);
-}
-
-.card__saving--worse { color: var(--ink-faint); }
-
-/* Route line inside a result, with each node's airport and date beneath. */
-.card__route { display: grid; gap: 0.5rem; }
 
 .legs {
   display: flex;
@@ -611,23 +539,7 @@ a:focus-visible {
 .legs__stop:last-child { text-align: right; }
 
 .legs__code { color: var(--ink); font-weight: 600; letter-spacing: 0.06em; }
-.legs__place { font-family: var(--han); font-size: 0.72rem; color: var(--ink-faint); }
 .legs__date { font-size: 0.7rem; }
-
-/* Provenance rides with the number, never separately. */
-.stamp {
-  font-family: var(--mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.06em;
-  color: var(--ink-faint);
-  border: 1px solid var(--rule);
-  border-radius: 2px;
-  padding: 0.15rem 0.35rem;
-  white-space: nowrap;
-}
-
-.stamp--live { color: var(--airway); border-color: var(--airway); }
-.stamp--none { color: var(--boundary); border-color: var(--boundary); }
 
 .card__risks {
   margin: 0;
@@ -645,15 +557,6 @@ a:focus-visible {
   font-family: var(--mono);
 }
 
-.card__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  align-items: center;
-  padding-top: 0.75rem;
-  border-top: 1px dashed var(--rule);
-}
-
 .card__actions .label {
   font-family: var(--mono);
   font-size: 0.68rem;
@@ -664,20 +567,6 @@ a:focus-visible {
 }
 
 a.chip { text-decoration: none; }
-
-.verdict {
-  font-family: var(--mono);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-  display: grid;
-  gap: 0.25rem;
-  padding: 0.6rem 0.75rem;
-  background: var(--paper-sunk);
-  border-radius: var(--radius);
-}
-
-.verdict__row { display: flex; justify-content: space-between; gap: 1rem; }
-.verdict__win { color: var(--airway); font-weight: 600; }
 
 /* ---- Colophon --------------------------------------------------------- */
 
@@ -699,42 +588,10 @@ a.chip { text-decoration: none; }
   .hero { grid-template-columns: 1fr; gap: 1.5rem; padding: 1.75rem 0 2rem; }
   .stop { grid-template-columns: minmax(0, 1fr); gap: 0.4rem; }
   .stop__role { padding-top: 0; }
-  .hop { padding-left: 0; }
-  .legs__place { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
-}
-
-/* ---- Mode switch ------------------------------------------------------ */
-
-.modes {
-  display: flex;
-  gap: 0;
-  margin-bottom: 1rem;
-  border-bottom: 1px solid var(--rule-strong);
-}
-
-.modes__tab {
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-  padding: 0.7rem 1.1rem;
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  color: var(--ink-faint);
-  cursor: pointer;
-}
-
-.modes__tab:hover { color: var(--airway); }
-
-.modes__tab[aria-selected="true"] {
-  color: var(--airway);
-  border-bottom-color: var(--airway);
-  font-weight: 600;
 }
 
 .reverse__intro {
@@ -787,7 +644,9 @@ a.chip { text-decoration: none; }
 /* One ticket: role label, route line, links. */
 .ticket {
   display: grid;
-  grid-template-columns: 5.5rem minmax(0, 1fr);
+  /* 這一欄現在要裝下「A 票 / 包覆票 / 開口」再加一行說明,5.5rem 會把說明
+     切成每行三個字。 */
+  grid-template-columns: 8rem minmax(0, 1fr);
   gap: 0.5rem 1rem;
   padding: 0.8rem 0;
   border-top: 1px dashed var(--rule);
@@ -813,9 +672,118 @@ a.chip { text-decoration: none; }
   color: var(--ink);
 }
 
+/* 「A 票」是別人講倒買法時用的名字,所以它要比「包覆票」更醒目 ——
+   使用者是拿著那篇文章來對照的。 */
+.ticket__code {
+  font-size: 0.9rem;
+  letter-spacing: 0.12em;
+  border-bottom: 2px solid var(--airway);
+  padding-bottom: 0.1rem;
+  margin-bottom: 0.25rem;
+}
+
+.ticket__note {
+  margin-top: 0.35rem;
+  font-family: var(--han);
+  font-size: 0.7rem;
+  line-height: 1.5;
+  letter-spacing: 0;
+  color: var(--ink-faint);
+}
+
 .ticket__body { min-width: 0; display: grid; gap: 0.5rem; }
 
 .ticket__links { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+/* 航段代號,掛在那一段的起點上。 */
+.legs__tag {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.1em;
+  color: var(--airway);
+}
+
+/* ---- 怎麼飛 ------------------------------------------------------------ */
+
+/* 票是交叉的,行程不是。不寫這段,使用者會以為自己得照票面順序飛。 */
+.sequence {
+  margin-top: 0.9rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--airway);
+  border-radius: var(--radius);
+  background: var(--airway-soft);
+  display: grid;
+  gap: 0.35rem;
+}
+
+.sequence__title {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  color: var(--airway);
+}
+
+.sequence__trip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.8rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.sequence__when { font-size: 0.78rem; color: var(--ink-soft); }
+
+.sequence__codes {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: var(--ink);
+}
+
+/* ---- 參考:四段的單程價 ------------------------------------------------- */
+
+.reference {
+  margin-top: 0.9rem;
+  padding-top: 0.8rem;
+  border-top: 1px dashed var(--rule);
+  display: grid;
+  gap: 0.25rem;
+}
+
+.reference__title {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+
+.reference__note {
+  font-size: 0.74rem;
+  line-height: 1.7;
+  color: var(--ink-faint);
+  margin-bottom: 0.3rem;
+}
+
+.reference__row {
+  display: grid;
+  grid-template-columns: 2.2rem minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+
+.reference__code { color: var(--airway); letter-spacing: 0.08em; }
+.reference__leg { color: var(--ink-soft); }
+
+.reference__price {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  text-align: right;
+}
+
+.reference__price--none { color: var(--ink-faint); }
 
 @media (max-width: 860px) {
   .ticket { grid-template-columns: minmax(0, 1fr); }
