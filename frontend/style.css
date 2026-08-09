@@ -1019,3 +1019,20 @@ a.chip { text-decoration: none; }
 .stop__row .field { flex: 1 1 11rem; min-width: 0; max-width: 100%; }
 .stop__row .field select { width: 100%; min-width: 0; }
 .stop__row .field--narrow { flex: 0 0 auto; }
+
+/* 篩選狀態貼在數字旁邊。寫在收起來的面板裡等於沒寫 —— 使用者點進訂票網站
+   才發現價格對不上,而那正是他回報的問題。 */
+.total__applied {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--airway);
+}
+
+.total__warn {
+  font-size: 0.78rem;
+  line-height: 1.65;
+  color: var(--boundary);
+  border-left: 2px solid var(--boundary);
+  padding-left: 0.6rem;
+  margin-top: 0.2rem;
+}

@@ -784,6 +784,24 @@ function totalCard(group, currency) {
   if (group.split_total != null) {
     card.append(el("div", "total__label", "同樣這四段,各自買單程"));
     card.append(el("div", "total__price", money(group.split_total, currency)));
+
+    // 篩選條件的狀態要**貼在數字旁邊**,不能只寫在收起來的面板裡 ——
+    // 那個面板預設是關的,使用者根本沒讀到,然後點進 Google Flights 發現
+    // 價格對不上。他回報的就是這件事。
+    if ($("#nonstop").checked) {
+      card.append(el("div", "total__applied", "只要直達 —— 已算進這個數字"));
+    }
+    if (state.airlines.size) {
+      const names = [...state.airlines]
+        .map((code) => state.airlineNames.get(code) || code).join("、");
+      card.append(
+        el("div", "total__warn",
+           `你選了${names},但這個數字是不分航空公司的最低價。` +
+           `我們排名用的快取價根本沒有航空公司欄位,所以它不是${names}的價 —— ` +
+           `點右邊的連結才是。`)
+      );
+    }
+
     card.append(el("div", "total__note",
       "反向票要比這個便宜才值得買 —— 下面兩張票的真價請點連結查。"));
   } else {
