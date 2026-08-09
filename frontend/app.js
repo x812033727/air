@@ -380,17 +380,20 @@ function airlineChip(airline) {
     paint();
     renderAirlineCount();
     // 已經有結果在畫面上時,連結是舊的 —— 講出來,不要讓使用者以為改完就生效了。
-    if ($("#reverse-results").hidden === false) {
-      showNotice(
-        "航空公司改了",
-        "已經在畫面上的連結還是舊的。再按一次「組票」就會套用。",
-        "info",
-        "airlines-restale"
-      );
-    }
+    noteStale();
   });
   paint();
   return chip;
+}
+
+function noteStale() {
+  if ($("#reverse-results").hidden) return;
+  showNotice(
+    "篩選條件改了",
+    "已經在畫面上的價格與連結還是舊的。再按一次「組票」就會套用。",
+    "info",
+    "filters-restale"
+  );
 }
 
 function renderAirlineCount() {
@@ -575,6 +578,7 @@ function ticketRow(ticket, currency) {
 function linkChips(links) {
   const row = el("div", "ticket__links");
   const picked = state.airlines.size > 0;
+  const nonstop = $("#nonstop").checked;
   for (const [name, href] of Object.entries(links)) {
     const info = state.linkInfo[name] || {};
     const link = el("a", "chip chip--link");
@@ -584,18 +588,18 @@ function linkChips(links) {
     if (info.locale) tags.push(info.locale);
     // 只在真的選了航空公司的時候才標篩選狀態 —— 沒選的時候「未篩選」
     // 是廢話,而廢話會把真正重要的那一個字淹掉。
-    if (picked) tags.push(info.filters_airlines ? "已篩選" : "未篩選");
+    if (picked) tags.push(info.filters_airlines ? "航空公司已篩" : "航空公司未篩");
+    if (nonstop) tags.push(info.filters_stops ? "直達" : "直達未篩");
+    const missed = (picked && !info.filters_airlines) || (nonstop && !info.filters_stops);
     if (tags.length) {
-      const tag = el("span",
-        `chip__tag${picked && !info.filters_airlines ? " chip__tag--warn" : ""}`,
-        tags.join("・"));
-      link.append(tag);
+      link.append(el("span", `chip__tag${missed ? " chip__tag--warn" : ""}`,
+                     tags.join("・")));
     }
 
     link.href = href;
     link.target = "_blank";
     link.rel = "noopener";
-    if (picked && !info.filters_airlines) {
+    if (missed) {
       link.title = "這個網站的篩選參數我們沒有驗證過,寧可不帶 —— " +
                    "帶錯的話它會回一張空清單,而空清單長得就像「那天沒有班機」。";
     }
@@ -724,6 +728,7 @@ async function runReverse(event) {
         passengers: Number($("#rev-passengers").value) || 1,
         cabin: $("#rev-cabin").value,
         airlines: [...state.airlines],
+        nonstop: $("#nonstop").checked,
       }),
     });
 
@@ -786,6 +791,7 @@ async function init() {
   wireKeyPanel();
   wirePasswordPanel();
   wireAirlinePanel();
+  $("#nonstop").addEventListener("change", noteStale);
   await migrateLegacyKeys();
   await renderKeyState();
   await initReverse();

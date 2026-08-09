@@ -527,10 +527,21 @@ def _store(
 # Reading
 # --------------------------------------------------------------------------
 
+# 「直達」在這裡跟「航空公司」是完全不同的東西:轉機次數我們**真的有資料**
+# (`price_cache.transfers`,來自 month-matrix 的 `number_of_changes`),所以它可以
+# 誠實地改變站內顯示的數字,不是只能跟著連結出去。
+#
+# `transfers IS NULL` 一律排除:那代表我們不知道那一筆轉幾次,而「不知道」不能
+# 算成「直達」—— 那正是這個站到處在防的那種話。
+NONSTOP_SQL = " AND transfers = 0"
+
+
 def load_lookup(
     conn: sqlite3.Connection,
     pairs: Sequence[tuple[str, str]],
     currency: str | None = None,
+    *,
+    nonstop: bool = False,
 ) -> dict[tuple[str, str, date], PricePoint]:
     """Pull every cached price for these routes into memory in one query.
 
@@ -545,7 +556,9 @@ def load_lookup(
     for origin, destination in pairs:
         args.extend([origin, destination])
     rows = conn.execute(
-        f"SELECT * FROM price_cache WHERE currency = ? AND ({clauses})", args
+        f"SELECT * FROM price_cache WHERE currency = ? AND ({clauses})"
+        + (NONSTOP_SQL if nonstop else ""),
+        args,
     ).fetchall()
 
     lookup: dict[tuple[str, str, date], PricePoint] = {}
@@ -585,6 +598,7 @@ def nearest_priced_dates(
     limit: int = 3,
     window_days: int | None = 14,
     month: str | None = None,
+    nonstop: bool = False,
 ) -> list[PricePoint]:
     """這條航線上離 `target` 最近、而且有價的日子。
 
@@ -610,6 +624,8 @@ def nearest_priced_dates(
     if month is not None:
         sql += " AND substr(depart_date, 1, 7) = ?"
         args.append(month)
+    if nonstop:
+        sql += NONSTOP_SQL
     sql += " ORDER BY ABS(julianday(depart_date) - julianday(?)) ASC LIMIT ?"
     args += [target.isoformat(), limit]
 
@@ -617,16 +633,19 @@ def nearest_priced_dates(
     return [point for point in map(_point_from_row, rows) if point is not None]
 
 
-GapReason = Literal["not_fetched", "route_empty", "nearby", "far_only"]
+GapReason = Literal[
+    "not_fetched", "route_empty", "connections_only", "nearby", "far_only"
+]
 
 
 @dataclass(frozen=True)
 class Gap:
-    """為什麼這一段沒有價格 —— 分成使用者要採取不同行動的四種情況。
+    """為什麼這一段沒有價格 —— 分成使用者要採取不同行動的幾種情況。
 
-    這四種在畫面上長得一樣(一個空格),但下一步完全不同:沒查過要按重查、
-    整個月都沒有要換航線或機場、只有遠處有價要改日期。全部併成「查無資料」等於
-    把使用者能做的事一起藏起來,而那正是他回報「還是沒拿到價格」的原因。
+    它們在畫面上長得一樣(一個空格),但下一步完全不同:沒查過要按重查、
+    整個月都沒有要換航線或機場、只有轉機班要放寬「只要直達」、只有遠處有價要改
+    日期。全部併成「查無資料」等於把使用者能做的事一起藏起來,而那正是他回報
+    「還是沒拿到價格」的原因。
     """
 
     origin: str
@@ -649,6 +668,7 @@ def explain_gap(
     fetched: dict[tuple[str, str, str], int] | None = None,
     sibling_origins: Sequence[str] = (),
     sibling_destinations: Sequence[str] = (),
+    nonstop: bool = False,
 ) -> Gap:
     """把一個空價格變成一句能行動的話。
 
@@ -677,6 +697,7 @@ def explain_gap(
         currency=currency,
         sibling_origins=sibling_origins,
         sibling_destinations=sibling_destinations,
+        nonstop=nonstop,
     )
 
     if month_rows < 0:
@@ -684,7 +705,7 @@ def explain_gap(
                    same_city=same_city)
 
     nearby = tuple(nearest_priced_dates(
-        conn, origin, destination, target, currency=currency
+        conn, origin, destination, target, currency=currency, nonstop=nonstop
     ))
     if nearby:
         return Gap(origin, destination, target, "nearby", month, month_rows,
@@ -695,11 +716,24 @@ def explain_gap(
     # 然後配上一句寫著「2026-12」的說明,那是直接說錯話。
     far = tuple(nearest_priced_dates(
         conn, origin, destination, target,
-        currency=currency, window_days=None, month=month,
+        currency=currency, window_days=None, month=month, nonstop=nonstop,
     ))
     if far:
         return Gap(origin, destination, target, "far_only", month, month_rows,
                    nearby=far, same_city=same_city)
+
+    # 只要直達的時候,「一列都沒有」有兩種完全不同的意思,而且說錯的那種會把
+    # 使用者推向錯的結論:這條航線這個月**有**票,只是全部要轉機。說成
+    # 「沒人搜過」會讓他去按重查,而重查一百次也不會多出一班直飛。
+    if nonstop:
+        any_month = nearest_priced_dates(
+            conn, origin, destination, target,
+            currency=currency, window_days=None, month=month, limit=1,
+        )
+        if any_month:
+            return Gap(origin, destination, target, "connections_only",
+                       month, month_rows, same_city=same_city)
+
     return Gap(origin, destination, target, "route_empty", month, month_rows,
                same_city=same_city)
 
@@ -713,6 +747,7 @@ def _same_city_prices(
     currency: str,
     sibling_origins: Sequence[str],
     sibling_destinations: Sequence[str],
+    nonstop: bool = False,
 ) -> tuple[PricePoint, ...]:
     """同一天、同城不同機場、有價的替代航段。"""
     pairs = [(code, destination) for code in sibling_origins if code != origin]
@@ -728,6 +763,7 @@ def _same_city_prices(
         f"""
         SELECT * FROM price_cache
         WHERE currency = ? AND depart_date = ? AND ({clauses})
+        {NONSTOP_SQL if nonstop else ""}
         ORDER BY price ASC
         """,
         args,

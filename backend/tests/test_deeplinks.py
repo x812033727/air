@@ -195,3 +195,38 @@ class TestAirlineFilter:
         assert deeplinks.LINK_INFO["google_flights"]["locale"] == "繁中"
         assert deeplinks.LINK_INFO["kayak"]["locale"] == "繁中"
         assert deeplinks.LINK_INFO["aviasales"]["locale"] == "英文"
+
+
+class TestNonstopFilter:
+    """直達是**航段裡的 field 5**(轉機次數上限,0 = 只要直達)。
+
+    跟航空公司一樣是在瀏覽器裡按 Google 自己的篩選面板、再把它產生的網址讀回來
+    解碼得到的。兩個一起帶的多段行程實測會顯示「所有篩選器 (2)」,
+    左邊是「直達, 轉機次數, 已選取」,右邊是「BR +1, 航空公司, 已選取」。
+    """
+
+    def test_nonstop_lands_in_every_leg(self):
+        url = deeplinks.google_flights_url([OUTBOUND, INBOUND], nonstop=True)
+        # field 5 varint 0 → tag 0x28,兩段各一個。
+        assert decode(url).count(b"\x28\x00") == 2
+
+    def test_not_asking_leaves_the_bytes_untouched(self):
+        assert deeplinks.google_flights_url([OUTBOUND, INBOUND], nonstop=False) == (
+            deeplinks.google_flights_url([OUTBOUND, INBOUND])
+        )
+        assert b"\x28\x00" not in decode(deeplinks.google_flights_url([OUTBOUND, INBOUND]))
+
+    def test_kayak_joins_two_filters_with_a_semicolon(self):
+        """Kayak 把所有篩選塞在一個 fs 參數裡。實測 `fs=airlines=BR,CI;stops=0`
+        會原封不動出現在它回應的 `serverRequestState.params.fs`。"""
+        url = deeplinks.kayak_url([OUTBOUND], airlines=["BR", "CI"], nonstop=True)
+        assert "fs=airlines=BR,CI;stops=0" in url
+
+    def test_kayak_takes_nonstop_on_its_own(self):
+        assert "fs=stops=0" in deeplinks.kayak_url([OUTBOUND], nonstop=True)
+
+    def test_aviasales_is_still_left_alone(self):
+        combo = Combo(legs=(OUTBOUND,), shape_label="x", is_baseline=False)
+        links = deeplinks.links_for_single_ticket(combo, nonstop=True)
+        assert "stops" not in links["aviasales"]
+        assert deeplinks.LINK_INFO["aviasales"]["filters_stops"] is False

@@ -486,3 +486,98 @@ class TestExplainingAMissingPrice:
             conn, "KIX", "TPE", date(2026, 12, 2), sibling_origins=("ITM", "KIX")
         )
         assert all(p.origin != "KIX" for p in gap.same_city)
+
+
+class TestOnlyDirectFlights:
+    """直達跟航空公司是完全不同的東西:轉機次數我們**真的有資料**
+    (`price_cache.transfers`),所以它可以誠實地改變站內顯示的價格。
+    """
+
+    @pytest.fixture
+    def conn(self):
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.executescript(SCHEMA)
+        now = utcnow().isoformat()
+        rows = [
+            ("2026-10-05", 4120, 1),    # 便宜但要轉機
+            ("2026-10-06", 5609, 0),    # 貴一點但直達
+            ("2026-10-07", 3900, None), # 轉幾次不知道
+        ]
+        for day, price, transfers in rows:
+            connection.execute(
+                """INSERT INTO price_cache (origin, destination, depart_date, currency,
+                       price, transfers, airline, gate, flight_number, found_at,
+                       fetched_at, expires_at, source)
+                   VALUES ('TPE','FUK',?,'TWD',?,?,NULL,NULL,NULL,NULL,?,?,'test')""",
+                (day, price, transfers, now, now),
+            )
+        connection.execute(
+            "INSERT INTO route_fetch VALUES ('TPE','FUK','2026-10','TWD',3,?,?)",
+            (now, now),
+        )
+        yield connection
+        connection.close()
+
+    def test_the_cheaper_connecting_fare_disappears(self, conn):
+        """轉機的那筆比較便宜。要直達的人看到 4,120 卻訂不到,比看不到更糟。"""
+        full = cached.load_lookup(conn, [("TPE", "FUK")])
+        direct = cached.load_lookup(conn, [("TPE", "FUK")], nonstop=True)
+        assert len(full) == 3
+        assert [p.price for p in direct.values()] == [5609]
+
+    def test_unknown_transfers_is_not_counted_as_direct(self, conn):
+        """`transfers IS NULL` 代表我們不知道那一筆轉幾次。把「不知道」算成
+        「直達」正是這個站到處在防的那種話 —— 而且它剛好會挑最便宜的那筆。"""
+        direct = cached.load_lookup(conn, [("TPE", "FUK")], nonstop=True)
+        assert all(p.transfers == 0 for p in direct.values())
+        assert 3900 not in [p.price for p in direct.values()]
+
+    def test_nearby_days_respect_it_too(self, conn):
+        """建議的替代日期如果混進轉機班,使用者照著改日期還是訂不到直達。"""
+        found = cached.nearest_priced_dates(
+            conn, "TPE", "FUK", date(2026, 10, 20), limit=5, nonstop=True
+        )
+        assert [p.depart_date.isoformat() for p in found] == ["2026-10-06"]
+
+    def test_a_day_with_only_connecting_flights_reads_as_no_data(self, conn):
+        """10-05 有價,但只有轉機的。要直達的人那天就是沒有 —— 而且理由要說清楚,
+        不能只留一個空格。"""
+        gap = cached.explain_gap(conn, "TPE", "FUK", date(2026, 10, 5), nonstop=True)
+        assert gap.reason in {"nearby", "far_only"}
+        assert [p.depart_date.isoformat() for p in gap.nearby] == ["2026-10-06"]
+
+    def test_a_route_with_only_connecting_flights_is_not_called_unsearched(self, conn):
+        """實測抓到的:ITM→TPE 2026-12 有三天有價,但三天全是轉機的。
+        勾了「只要直達」之後說「整個月一天都沒有快取價 —— 沒人搜過」是**假的**,
+        而且方向相反:那句話會叫使用者去重查,但重查一百次也不會多出一班直飛。
+        """
+        conn.execute(
+            "INSERT INTO route_fetch VALUES ('TPE','KIX','2026-10','TWD',1,?,?)",
+            (utcnow().isoformat(), utcnow().isoformat()),
+        )
+        conn.execute(
+            """INSERT INTO price_cache (origin, destination, depart_date, currency,
+                   price, transfers, airline, gate, flight_number, found_at,
+                   fetched_at, expires_at, source)
+               VALUES ('TPE','KIX','2026-10-20','TWD',6476,1,NULL,NULL,NULL,NULL,?,?,'test')""",
+            (utcnow().isoformat(), utcnow().isoformat()),
+        )
+        gap = cached.explain_gap(conn, "TPE", "KIX", date(2026, 10, 20), nonstop=True)
+        assert gap.reason == "connections_only"
+
+    def test_without_the_filter_that_route_is_simply_priced(self, conn):
+        """同一條航線不勾直達就有價 —— 所以那個空格是篩選造成的,不是資料沒有。"""
+        conn.execute(
+            "INSERT INTO route_fetch VALUES ('TPE','KIX','2026-10','TWD',1,?,?)",
+            (utcnow().isoformat(), utcnow().isoformat()),
+        )
+        conn.execute(
+            """INSERT INTO price_cache (origin, destination, depart_date, currency,
+                   price, transfers, airline, gate, flight_number, found_at,
+                   fetched_at, expires_at, source)
+               VALUES ('TPE','KIX','2026-10-20','TWD',6476,1,NULL,NULL,NULL,NULL,?,?,'test')""",
+            (utcnow().isoformat(), utcnow().isoformat()),
+        )
+        assert cached.load_lookup(conn, [("TPE", "KIX")])
+        assert not cached.load_lookup(conn, [("TPE", "KIX")], nonstop=True)

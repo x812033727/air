@@ -65,6 +65,7 @@ def build_request(
     cabin: str = "economy",
     currency: str | None = None,
     airlines: Sequence[str] | None = None,
+    nonstop: bool = False,
 ) -> SearchRequest:
     """Resolve the user's city/airport picks into a concrete search request."""
     home = _waypoint(conn, home_codes, label=None, nights=(0, 0))
@@ -87,6 +88,7 @@ def build_request(
         cabin=cabin,
         currency=currency or settings.default_currency,
         airlines=deeplinks.normalise_airlines(airlines),
+        nonstop=nonstop,
     )
 
 
@@ -227,7 +229,7 @@ def run(
             "以下只列出行程組合,票價請用每列的連結查。"
         )
 
-    lookup = cached.load_lookup(conn, pairs, request.currency)
+    lookup = cached.load_lookup(conn, pairs, request.currency, nonstop=request.nonstop)
     fetched = cached.fetched_routes(conn, request.currency)
     # 同城機場查一次就好。一個空價格問一次,幾百個空價格就是幾百次查詢,
     # 換回來的還是同一張常數大小的對照表。
@@ -341,6 +343,7 @@ def _serialise(
                 cabin=request.cabin,
                 marker=marker,
                 airlines=request.airlines,
+                nonstop=request.nonstop,
             ),
             "split": deeplinks.links_for_split_tickets(
                 combo,
@@ -348,6 +351,7 @@ def _serialise(
                 cabin=request.cabin,
                 marker=marker,
                 airlines=request.airlines,
+                nonstop=request.nonstop,
             ),
         },
     }
@@ -370,6 +374,7 @@ def _gap_for(
         fetched=fetched,
         sibling_origins=siblings.get(leg.origin, ()),
         sibling_destinations=siblings.get(leg.destination, ()),
+        nonstop=request.nonstop,
     )
 
 

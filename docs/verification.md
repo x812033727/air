@@ -103,6 +103,44 @@ airport 9,261 · railway 699 · bus 184 · heliport 173 · harbour 52
 
 ---
 
+## Google Flights 的篩選都在航段裡:航空公司 field 6、直達 field 5
+
+**日期**:2026-08-09 · **方法**:Chromium 開一次 TPE→NRT,按 Google 自己的篩選面板
+勾「僅顯示直達航班」,再把它產生的 URL 讀回來解碼
+
+```
+篩選前  field 3 { 2:"2026-10-07"        13{2:"TPE"}  14{2:"NRT"} }
+篩選後  field 3 { 2:"2026-10-07"  5:0   13{...}      14{...} }
+                              ^^^  轉機次數上限,0 = 只要直達
+```
+
+兩個一起帶的多段行程實測會顯示「所有篩選器 (2)」,左邊「直達, 轉機次數, 已選取」、
+右邊「BR +1, 航空公司, 已選取」。
+
+**直達跟航空公司在這個站的地位完全不同**:轉機次數我們自己有資料
+(`price_cache.transfers` ← month-matrix 的 `number_of_changes`,801 筆裡 583 筆是 0),
+所以它**會改變站內顯示的價格**,不是只跟著連結出去。`transfers IS NULL` 一律排除 ——
+「不知道」不能算成「直達」。
+
+## Kayak 的篩選:一個 fs 參數,分號隔開
+
+**日期**:2026-08-09 · **方法**:對 `www.tw.kayak.com` 送出請求,讀回應裡的
+`serverRequestState.params.fs`
+
+| 送出 | 回應裡的 `params.fs` |
+| --- | --- |
+| (不帶) | 整份 HTML 找不到 `airlines=` |
+| `fs=airlines=BR,CI` | `"airlines=BR,CI"` |
+| `fs=airlines=BR,CI;stops=0` | `"airlines=BR,CI;stops=0"` |
+
+⚠️ 這證明的是「`fs` 會被 Kayak 收進查詢狀態」,不是「它一定照做」——
+Kayak 擋機器人,開不了它的畫面來確認結果列。所以按鈕上照實標,不假裝驗過。
+
+⚠️ 繁體中文站是 **`www.tw.kayak.com`**,不是 `kayak.com.tw`(後者對
+`/flights/...` 回 404)。回應裡 `"locale":"zh-tw"`。
+
+---
+
 ## Google Flights 的航空公司篩選是航段裡的 field 6
 
 **日期**:2026-08-09 · **方法**:Chromium 開一次 TPE→NRT,用 Google 自己的篩選面板

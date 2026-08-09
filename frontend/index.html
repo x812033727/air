@@ -114,6 +114,18 @@
                placeholder="打名字或代碼,例如 Starlux / JX">
       </label>
       <div class="airlines__chips" id="airline-found"></div>
+
+      <div class="nonstop">
+        <label class="switch">
+          <input type="checkbox" id="nonstop">
+          <span>只要直達</span>
+        </label>
+        <p class="airlines__note">
+          這個跟上面不一樣:轉機次數我們<strong>真的有資料</strong>,所以打勾之後
+          <strong>下面的參考價會只算直達的</strong>,連結也會跟著帶篩選。
+          轉機次數不明的那幾筆會被排掉 —— 「不知道」不能當成「直達」。
+        </p>
+      </div>
     </div>
   </details>
 

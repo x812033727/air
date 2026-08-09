@@ -160,6 +160,9 @@ class SearchRequest:
     # 想搭的航空公司(IATA)。**這不會改變排名**,因為排名用的快取價根本沒有
     # 航空公司欄位 —— 它只會跟著深連結出去,讓點過去的搜尋只列這幾家。
     airlines: tuple[str, ...] = ()
+    # 只要直達。跟 airlines 不一樣的是,**這個會改變站內顯示的價格** ——
+    # 轉機次數我們真的有資料(price_cache.transfers),所以篩得動。
+    nonstop: bool = False
 
     def __post_init__(self) -> None:
         if not self.stops:

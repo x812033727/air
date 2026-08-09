@@ -82,6 +82,8 @@ class SearchIn(BaseModel):
     # 所以拿它去篩會篩掉航線卻篩不掉價格,顯示的數字根本不是那家的。
     # 它只跟著深連結出去,讓點過去的搜尋只列這幾家。
     airlines: list[str] = Field(default_factory=list, max_length=20)
+    # 只要直達。這個**會**改變站內的價格 —— 轉機次數我們真的有資料。
+    nonstop: bool = False
 
 
 class LegIn(BaseModel):
@@ -108,6 +110,7 @@ class ReverseIn(BaseModel):
     cabin: Literal["economy", "premium_economy", "business", "first"] = "economy"
     # 同 SearchIn:只跟著連結出去,不參與任何排名或計價。
     airlines: list[str] = Field(default_factory=list, max_length=20)
+    nonstop: bool = False
 
 
 class KeysIn(BaseModel):
@@ -245,6 +248,7 @@ def _to_request(body: SearchIn, conn: sqlite3.Connection):
             passengers=body.passengers,
             cabin=body.cabin,
             airlines=body.airlines,
+            nonstop=body.nonstop,
         )
     except search.UnknownPlace as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -466,7 +470,7 @@ def reverse_plans(
         except cached.MissingToken as exc:
             warnings.append(str(exc))
 
-    lookup = cached.load_lookup(conn, pairs)
+    lookup = cached.load_lookup(conn, pairs, nonstop=body.nonstop)
     fetched = cached.fetched_routes(conn)
     siblings = refdata.siblings_by_airport(
         conn, {code for pair in pairs for code in pair}
@@ -496,7 +500,7 @@ def reverse_plans(
 REVERSE_GROUP_LIMIT = 12
 
 
-def _reference_legs(plan, lookup, fetched, conn, siblings) -> list[dict[str, Any]]:
+def _reference_legs(plan, lookup, fetched, conn, siblings, nonstop=False) -> list[dict[str, Any]]:
     """四段各自的**單程**快取價,當作參考基準。
 
     ⚠️ 這**不是**這幾張票的價格,而且**不能加起來當總價** —— 倒買法省錢的機制
@@ -532,6 +536,7 @@ def _reference_legs(plan, lookup, fetched, conn, siblings) -> list[dict[str, Any
                             fetched=fetched,
                             sibling_origins=(siblings or {}).get(leg.origin, ()),
                             sibling_destinations=(siblings or {}).get(leg.destination, ()),
+                            nonstop=nonstop,
                         )
                     )
                 )
@@ -586,7 +591,9 @@ def _serialise_plan(
         # 所以把四段各自的單程價當**參考基準**列出來 —— 明說它不是這兩張票的
         # 價格、也不能加起來當總價。空白的畫面沒有告訴使用者任何事;
         # 一個標錯的總價則會直接騙他。
-        "reference_legs": _reference_legs(plan, lookup, fetched, conn, siblings)
+        "reference_legs": _reference_legs(
+            plan, lookup, fetched, conn, siblings, body.nonstop
+        )
         if not plan.priceable
         else [],
         "tickets": [
@@ -623,6 +630,7 @@ def _serialise_plan(
                                         sibling_destinations=(siblings or {}).get(
                                             leg.destination, ()
                                         ),
+                                        nonstop=body.nonstop,
                                     )
                                 ),
                             }
@@ -650,6 +658,7 @@ def _serialise_plan(
                     passengers=body.passengers,
                     cabin=body.cabin,
                     airlines=body.airlines,
+                    nonstop=body.nonstop,
                 ),
             }
             for i, ticket in enumerate(plan.tickets)

@@ -87,6 +87,7 @@ def _varint_field(field: int, value: int) -> bytes:
 # that opens a plausible-looking but wrong search.
 _GF_LEG = 3
 _GF_DATE = 2
+_GF_MAX_STOPS = 5
 _GF_AIRLINE = 6
 _GF_ORIGIN = 13
 _GF_DESTINATION = 14
@@ -95,15 +96,21 @@ _GF_SEAT = 9
 _GF_TRIP = 19
 
 
-def _google_leg(leg: FlightLeg, airlines: Sequence[str] = ()) -> bytes:
+def _google_leg(
+    leg: FlightLeg, airlines: Sequence[str] = (), nonstop: bool = False
+) -> bytes:
     """One leg inside Google Flights' `tfs` protobuf.
 
-    The airline filter is a repeated IATA code **inside the leg**, not a
-    top-level field — read back out of the URL Google itself produced after
-    ticking 長榮 and 華航 in its own filter panel. Setting it on every leg is
-    what the UI does for multi-city, so we do the same.
+    篩選是**航段裡的欄位**,不是頂層的:航空公司是重複的 field 6,轉機次數上限是
+    field 5(0 = 只要直達)。兩個都是在瀏覽器裡按 Google 自己的篩選面板、再把它
+    產生的網址讀回來解碼得到的。實測兩個一起帶,多段行程會顯示
+    「所有篩選器 (2)・直達, 轉機次數, 已選取・BR +1, 航空公司, 已選取」。
+
+    每一段都要設 —— Google 自己的介面在多停點模式就是這樣寫的。
     """
     body = _string_field(_GF_DATE, leg.depart_date.isoformat())
+    if nonstop:
+        body += _varint_field(_GF_MAX_STOPS, 0)
     for code in airlines:
         body += _string_field(_GF_AIRLINE, code)
     return (
@@ -135,6 +142,7 @@ def google_flights_url(
     passengers: int = 1,
     cabin: str = "economy",
     airlines: Sequence[str] = (),
+    nonstop: bool = False,
 ) -> str:
     """Build a Google Flights search URL that opens on this exact itinerary.
 
@@ -144,7 +152,9 @@ def google_flights_url(
     browser rather than to guess — see `docs/verification.md`.
     """
     picked = normalise_airlines(airlines)
-    body = b"".join(_message_field(_GF_LEG, _google_leg(leg, picked)) for leg in legs)
+    body = b"".join(
+        _message_field(_GF_LEG, _google_leg(leg, picked, nonstop)) for leg in legs
+    )
     body += b"".join(_varint_field(_GF_PASSENGER, 1) for _ in range(max(1, passengers)))
     body += _varint_field(_GF_SEAT, CABIN_CODES.get(cabin, 1))
     body += _varint_field(_GF_TRIP, _trip_type(legs))
@@ -168,21 +178,31 @@ def kayak_url(
     passengers: int = 1,
     cabin: str = "economy",
     airlines: Sequence[str] = (),
+    nonstop: bool = False,
 ) -> str:
     """Kayak takes each leg as a plain `ORIGIN-DEST/YYYY-MM-DD` path segment.
 
-    航空公司篩選走 `fs=airlines=BR,CI`。這個參數是實測過的:帶了之後,Kayak 自己
-    送回來的頁面裡 `serverRequestState.params.fs` 就是 `"airlines=BR,CI"`,不帶則
-    整份 HTML 找不到 `airlines=`。也就是它真的被收進 Kayak 的查詢狀態,
-    不是被丟掉的網址參數。
+    篩選全部塞在一個 `fs` 參數裡,多個條件用分號隔開:`fs=airlines=BR,CI;stops=0`。
+    實測:帶了之後 Kayak 自己送回來的頁面裡 `serverRequestState.params.fs` 就是
+    那個字串,不帶則整份 HTML 找不到 `airlines=` —— 它真的被收進 Kayak 的查詢
+    狀態,不是被丟掉的網址參數。
+
+    ⚠️ 那個差異測試證明的是「`fs` 會被收下」。`stops=0` 搭的是同一個機制,
+    而且是 Kayak 自己介面用的值,但它有沒有真的照做我們沒有辦法在這裡驗
+    (Kayak 擋機器人,開不了它的畫面)。所以按鈕上照實標,不假裝驗過。
     """
     path = "/".join(f"{leg.origin}-{leg.destination}/{leg.depart_date.isoformat()}" for leg in legs)
     suffix = f"?sort=price_a&travelers={max(1, passengers)}"
     if cabin != "economy":
         suffix += f"&cabin={cabin}"
+    filters = []
     picked = normalise_airlines(airlines)
     if picked:
-        suffix += f"&fs=airlines={','.join(picked)}"
+        filters.append(f"airlines={','.join(picked)}")
+    if nonstop:
+        filters.append("stops=0")
+    if filters:
+        suffix += "&fs=" + ";".join(filters)
     return f"{KAYAK_HOST}/flights/{path}{suffix}"
 
 
@@ -225,6 +245,7 @@ LINK_INFO = {
         # 「長榮航空 +1, 航空公司, 已選取」。
         "locale": "繁中",
         "filters_airlines": True,
+        "filters_stops": True,
     },
     "kayak": {
         "label": "Kayak",
@@ -232,6 +253,7 @@ LINK_INFO = {
         # serverRequestState.params.fs。
         "locale": "繁中",
         "filters_airlines": True,
+        "filters_stops": True,
     },
     "aviasales": {
         "label": "Aviasales",
@@ -240,6 +262,7 @@ LINK_INFO = {
         # (所以報價最接近站內顯示的數字)也是聯盟連結,但要照實標。
         "locale": "英文",
         "filters_airlines": False,
+        "filters_stops": False,
     },
 }
 
@@ -251,14 +274,17 @@ def links_for_single_ticket(
     cabin: str = "economy",
     marker: str | None = None,
     airlines: Sequence[str] = (),
+    nonstop: bool = False,
 ) -> dict[str, str]:
     """Links that price the whole itinerary as one ticket."""
     return {
         "google_flights": google_flights_url(
-            combo.legs, passengers=passengers, cabin=cabin, airlines=airlines
+            combo.legs, passengers=passengers, cabin=cabin,
+            airlines=airlines, nonstop=nonstop,
         ),
         "kayak": kayak_url(
-            combo.legs, passengers=passengers, cabin=cabin, airlines=airlines
+            combo.legs, passengers=passengers, cabin=cabin,
+            airlines=airlines, nonstop=nonstop,
         ),
         "aviasales": aviasales_url(combo.legs, passengers=passengers, marker=marker),
     }
@@ -271,6 +297,7 @@ def links_for_split_tickets(
     cabin: str = "economy",
     marker: str | None = None,
     airlines: Sequence[str] = (),
+    nonstop: bool = False,
 ) -> list[dict[str, str]]:
     """One set of links per leg — this is the 拼票 買法.
 
@@ -283,10 +310,12 @@ def links_for_split_tickets(
             "leg": f"{leg.origin}→{leg.destination}",
             "date": leg.depart_date.isoformat(),
             "google_flights": google_flights_url(
-                [leg], passengers=passengers, cabin=cabin, airlines=airlines
+                [leg], passengers=passengers, cabin=cabin,
+                airlines=airlines, nonstop=nonstop,
             ),
             "kayak": kayak_url(
-                [leg], passengers=passengers, cabin=cabin, airlines=airlines
+                [leg], passengers=passengers, cabin=cabin,
+                airlines=airlines, nonstop=nonstop,
             ),
             "aviasales": aviasales_url([leg], passengers=passengers, marker=marker),
         }
