@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Iterator, Sequence
 
 from app.combos import Combo, FlightLeg, SpecTooLarge
@@ -262,6 +262,182 @@ def build_plans(home: Sequence[str], first: Trip, second: Trip) -> list[Plan]:
     )
 
     return [normal, reverse, hybrid, split]
+
+
+@dataclass(frozen=True)
+class TripWindow:
+    """一趟旅行的**區間**:大概什麼時候出發、玩幾天,哪些機場都可以。
+
+    固定成四個確切日期是這個功能一直沒有價格的原因之一。上游的快取是別人搜出來的,
+    同一條航線某幾天有價、某幾天沒有,而使用者**沒有辦法知道是哪幾天** ——
+    實測同一組行程只把第二趟從 10/20 挪到 10/06,可算出總價的機場組合就從 0 變成 36。
+    讓日期在區間內浮動,等於把「猜中有資料的那天」這件事從使用者身上拿掉。
+    """
+
+    label: str
+    airports: tuple[str, ...]
+    depart_earliest: date
+    depart_latest: date
+    nights_min: int
+    nights_max: int
+
+    def __post_init__(self) -> None:
+        if not self.airports:
+            raise ValueError(f"{self.label} 沒有可用的機場")
+        if self.depart_latest < self.depart_earliest:
+            raise ValueError(f"{self.label} 的出發區間結束早於開始")
+        if self.nights_min < 0 or self.nights_max < self.nights_min:
+            raise ValueError(f"{self.label} 的天數範圍不合理")
+
+    def options(self) -> Iterator[tuple[date, date]]:
+        """(出發日, 回程日) 的每一種可能。"""
+        span = (self.depart_latest - self.depart_earliest).days
+        for offset in range(span + 1):
+            depart = self.depart_earliest + timedelta(days=offset)
+            for nights in range(self.nights_min, self.nights_max + 1):
+                yield depart, depart + timedelta(days=nights)
+
+
+@dataclass(frozen=True)
+class Leg:
+    """一段單程,以及它的快取價(沒有就是 None)。"""
+
+    origin: str
+    destination: str
+    day: date
+    price: float | None
+
+
+@dataclass(frozen=True)
+class Half:
+    """一趟旅行選定的機場與日期,以及它那兩段單程的價。
+
+    倒買法的兩張票橫跨兩趟,但**四段全拆的總價是可分離的** —— 每一段只屬於一趟。
+    所以兩趟可以各自挑最便宜的,再相加,不必窮舉兩趟的乘積(那是 9 百萬種)。
+    """
+
+    trip: Trip
+    out: Leg
+    back: Leg
+
+    @property
+    def total(self) -> float | None:
+        if self.out.price is None or self.back.price is None:
+            return None
+        return self.out.price + self.back.price
+
+    @property
+    def missing(self) -> tuple[Leg, ...]:
+        return tuple(leg for leg in (self.out, self.back) if leg.price is None)
+
+
+def best_halves(
+    home_out: str,
+    home_back: str,
+    window: TripWindow,
+    price,
+    *,
+    limit: int = 3,
+) -> list[Half]:
+    """這一趟旅行最便宜的幾種(機場 × 日期)選法,有價的排前面。
+
+    `price(origin, destination, day)` 回傳快取價或 None。傳進來而不是直接查 DB,
+    是為了讓排序邏輯可以用一個字典完整測完。
+    """
+    halves: list[Half] = []
+    for out_airport, back_airport in _pairs(window.airports):
+        for depart, back in window.options():
+            out = Leg(home_out, out_airport, depart, price(home_out, out_airport, depart))
+            home = Leg(back_airport, home_back, back, price(back_airport, home_back, back))
+            halves.append(
+                Half(
+                    trip=Trip(window.label, (out_airport, back_airport), depart, back),
+                    out=out,
+                    back=home,
+                )
+            )
+    # 有總價的優先,再照便宜排;完全沒價的照日期排,至少是可預期的順序。
+    halves.sort(
+        key=lambda h: (
+            h.total is None,
+            h.total if h.total is not None else 0.0,
+            len(h.missing),
+            h.trip.depart,
+        )
+    )
+    return halves[:limit]
+
+
+@dataclass(frozen=True)
+class Combination:
+    """兩趟都選定之後的一整組買法。"""
+
+    home: tuple[str, str]
+    first: Half
+    second: Half
+    plans: tuple[Plan, ...]
+
+    @property
+    def split_total(self) -> float | None:
+        """四段全拆單程的總價。缺一段就是 None —— 絕不部分加總。"""
+        a, b = self.first.total, self.second.total
+        return None if a is None or b is None else a + b
+
+    @property
+    def missing(self) -> tuple[Leg, ...]:
+        return self.first.missing + self.second.missing
+
+
+def rank_combinations(
+    home: Sequence[str],
+    first: TripWindow,
+    second: TripWindow,
+    price,
+    *,
+    limit: int = 6,
+) -> list[Combination]:
+    """把兩個區間變成一份**排好序**的具體買法清單,有價格的在最前面。
+
+    原本的做法是照 `itertools.product` 的順序產生 144 種組合、取前 12、前端顯示第 0 種。
+    那個順序跟「哪一種有價」完全無關 —— 實測回傳的 12 組全部以 TPE→HND 開頭
+    (變化的是最後一個維度),HND 沒資料就 12 組全滅,而同一批裡有 36 種是有價的。
+
+    可分離性讓這件事很便宜:每一段單程只屬於其中一趟,所以兩趟各自挑完再相加,
+    不必窮舉兩趟的乘積。
+    """
+    for place in (home, first.airports, second.airports):
+        if len(place) > MAX_AIRPORTS_PER_PLACE:
+            raise SpecTooLarge(
+                f"每個地點最多選 {MAX_AIRPORTS_PER_PLACE} 個機場,目前有 {len(place)} 個。",
+                offender="airports",
+            )
+
+    combos: list[Combination] = []
+    for home_out, home_back in _pairs(tuple(home)):
+        firsts = best_halves(home_out, home_back, first, price)
+        seconds = best_halves(home_out, home_back, second, price)
+        for a in firsts:
+            for b in seconds:
+                if b.trip.depart <= a.trip.back:
+                    continue  # 第二趟必須整個在第一趟之後
+                combos.append(
+                    Combination(
+                        home=(home_out, home_back),
+                        first=a,
+                        second=b,
+                        plans=tuple(build_plans((home_out, home_back), a.trip, b.trip)),
+                    )
+                )
+
+    combos.sort(
+        key=lambda c: (
+            c.split_total is None,
+            c.split_total if c.split_total is not None else 0.0,
+            len(c.missing),
+            c.first.trip.depart,
+        )
+    )
+    return combos[:limit]
 
 
 def enumerate_plans(

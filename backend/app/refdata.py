@@ -357,6 +357,103 @@ def expand_airports(conn: sqlite3.Connection, codes: Iterable[str]) -> list[Airp
     ]
 
 
+def search_cities(
+    conn: sqlite3.Connection, query: str, *, limit: int = 20
+) -> list[City]:
+    """打字找地方,回傳城市(連它的機場)。
+
+    這支的存在理由是**選單原本是死路**:舊版的挑法是「選國家 → 從前 12 個城市裡點」,
+    而日本有 72 個可飛城市 —— 岡山、函館、石垣、靜岡全部點不到,而且畫面上寫著
+    「日本 (77)」,看起來只是排在後面,實際上根本沒有那個按鈕。美國更誇張,
+    525 個城市裡只列得出 12 個。
+
+    比對四種寫法,因為使用者手上有哪一種完全看心情:中文名(福岡)、英文名
+    (Fukuoka)、城市代碼(FUK)、機場代碼(HND)。參考資料只有 253 國裡的 90 國、
+    3,522 個可飛城市裡的 138 個有中文名,所以**英文與代碼一定要能搜** ——
+    不然沒有中文名的地方一樣是死路,只是死得比較隱晦。
+    """
+    q = query.strip()
+    if not q:
+        return []
+    like = f"%{q}%"
+    upper = q.upper()
+
+    rows = conn.execute(
+        """
+        SELECT a.code       AS airport_code,
+               a.name_zh    AS airport_name,
+               a.city_code  AS city_code,
+               a.country_code,
+               COALESCE(ct.name_zh, a.name_zh) AS city_name,
+               COALESCE(ct.name_en, '')        AS city_name_en,
+               COALESCE(co.name_zh, co.name_en, '') AS country_name
+        FROM airports a
+        LEFT JOIN cities ct    ON ct.code = a.city_code
+        LEFT JOIN countries co ON co.code = a.country_code
+        WHERE a.flightable = 1 AND a.iata_type = 'airport'
+          AND (
+                a.code = ?
+             OR a.city_code = ?
+             OR a.name_zh LIKE ?
+             OR a.name_en LIKE ?
+             OR COALESCE(ct.name_zh, '') LIKE ?
+             OR COALESCE(ct.name_en, '') LIKE ?
+          )
+        ORDER BY city_name, a.code
+        """,
+        (upper, upper, like, like, like, like),
+    ).fetchall()
+
+    grouped: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        grouped.setdefault(row["city_code"] or row["airport_code"], []).append(row)
+
+    cities = [
+        City(
+            code=city_code,
+            name=members[0]["city_name"],
+            country_code=members[0]["country_code"],
+            airports=tuple(
+                Airport(
+                    code=m["airport_code"],
+                    name=m["airport_name"],
+                    city_code=city_code,
+                    city_name=members[0]["city_name"],
+                    country_code=m["country_code"],
+                )
+                for m in members
+            ),
+        )
+        for city_code, members in grouped.items()
+    ]
+
+    def rank(city: City) -> tuple:
+        codes = {a.code for a in city.airports} | {city.code}
+        return (
+            0 if upper in codes else 1,          # 打代碼的人要的就是那一個
+            zh_names.city_rank(city.code),        # 台灣旅客真的會去的地方在前
+            -len(city.airports),                  # 多機場的城市是省錢的來源
+            city.name,
+        )
+
+    cities.sort(key=rank)
+    return cities[:limit]
+
+
+def country_names(conn: sqlite3.Connection, codes: Iterable[str]) -> dict[str, str]:
+    """國家代碼 → 顯示名稱。搜尋結果要標國家,否則「Santiago」有五個。"""
+    wanted = sorted({c for c in codes if c})
+    if not wanted:
+        return {}
+    placeholders = ",".join("?" * len(wanted))
+    rows = conn.execute(
+        f"SELECT code, COALESCE(name_zh, name_en) AS name FROM countries "
+        f"WHERE code IN ({placeholders})",
+        wanted,
+    ).fetchall()
+    return {row["code"]: row["name"] for row in rows}
+
+
 def siblings_by_airport(
     conn: sqlite3.Connection, codes: Iterable[str]
 ) -> dict[str, tuple[str, ...]]:

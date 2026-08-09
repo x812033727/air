@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Literal
 
 from pathlib import Path
@@ -93,10 +93,40 @@ class LegIn(BaseModel):
 
 
 class TripIn(BaseModel):
+    """一趟旅行。日期可以給確切兩天,也可以給**區間 + 天數**。
+
+    區間才是預設的用法。上游快取是別人搜出來的,同一條航線某幾天有價某幾天沒有,
+    而使用者無從得知是哪幾天 —— 實測同一組行程只把第二趟從 10/20 挪到 10/06,
+    算得出總價的機場組合就從 0 種變成 36 種。把「猜中有資料的那天」丟給使用者,
+    等於保證他看到一片空白。
+    """
+
     codes: list[str] = Field(..., min_length=1, description="城市或機場 IATA 代碼")
-    depart: date
-    back: date
+    depart: date | None = None
+    back: date | None = None
+    depart_earliest: date | None = None
+    depart_latest: date | None = None
+    nights_min: int = Field(4, ge=0, le=30)
+    nights_max: int = Field(6, ge=0, le=30)
     label: str | None = None
+
+    def dates(self) -> tuple[date, date, int, int]:
+        """(最早出發, 最晚出發, 最少幾晚, 最多幾晚)。
+
+        機場不在這裡處理 —— 那要查資料庫展開,而這個型別只認得使用者填的東西。
+        """
+        if self.depart is not None and self.back is not None and not self.depart_earliest:
+            # 舊式的「確切兩天」:視為一個寬度為 0 的區間,天數固定。
+            nights = (self.back - self.depart).days
+            if nights < 0:
+                raise ValueError("回程日早於去程日")
+            return self.depart, self.depart, nights, nights
+
+        earliest = self.depart_earliest or self.depart
+        if earliest is None:
+            raise ValueError("要嘛給 depart + back,要嘛給 depart_earliest")
+        latest = self.depart_latest or earliest
+        return earliest, latest, self.nights_min, max(self.nights_min, self.nights_max)
 
 
 class ReverseIn(BaseModel):
@@ -161,6 +191,32 @@ def country_airports(code: str, conn: sqlite3.Connection = Depends(get_conn)) ->
             }
             for city in cities
         ],
+    }
+
+
+@app.get("/api/ref/places")
+def search_places(
+    q: str, limit: int = 20, conn: sqlite3.Connection = Depends(get_conn)
+) -> dict[str, Any]:
+    """打字找地方。取代原本「選國家 → 從前 12 個城市裡點」的挑法。
+
+    那個挑法是**死路**,不是不方便:日本 72 個可飛城市只列得出 12 個,岡山、函館、
+    石垣點不到,而畫面上寫著「日本 (77)」—— 看起來只是排在後面,實際上沒有那個
+    按鈕。美國 525 個城市只列 12 個。使用者要去的地方一旦不在前 12 名,
+    這個工具對他就是完全不能用,而且畫面上沒有任何一句話說明。
+    """
+    cities = refdata.search_cities(conn, q, limit=max(1, min(limit, 50)))
+    names = refdata.country_names(conn, (c.country_code for c in cities))
+    return {
+        "places": [
+            {
+                "code": city.code,
+                "name": city.name,
+                "country": names.get(city.country_code, city.country_code),
+                "airports": [{"code": a.code, "name": a.name} for a in city.airports],
+            }
+            for city in cities
+        ]
     }
 
 
@@ -404,17 +460,22 @@ def route_airlines(
 # 倒買法
 # --------------------------------------------------------------------------
 
-def _trip(conn: sqlite3.Connection, spec: TripIn) -> reverse.Trip:
+def _window(
+    conn: sqlite3.Connection, spec: TripIn, fallback_label: str
+) -> reverse.TripWindow:
     airports = refdata.expand_airports(conn, spec.codes)
     if not airports:
         raise HTTPException(
             status_code=400, detail=f"找不到可飛的機場:{', '.join(spec.codes)}"
         )
-    return reverse.Trip(
-        label=spec.label or airports[0].city_name,
+    earliest, latest, nights_min, nights_max = spec.dates()
+    return reverse.TripWindow(
+        label=spec.label or airports[0].city_name or fallback_label,
         airports=tuple(a.code for a in airports),
-        depart=spec.depart,
-        back=spec.back,
+        depart_earliest=earliest,
+        depart_latest=latest,
+        nights_min=nights_min,
+        nights_max=nights_max,
     )
 
 
@@ -433,29 +494,34 @@ def reverse_plans(
     if not home:
         raise HTTPException(status_code=400, detail=f"找不到可飛的機場:{body.home}")
 
-    first, second = _trip(conn, body.first), _trip(conn, body.second)
-    keys = credentials.resolve(conn)
-
+    home_codes = tuple(a.code for a in home)
     try:
-        groups = reverse.enumerate_plans(
-            tuple(a.code for a in home), first, second,
-            try_both_orders=body.try_both_orders,
-        )
-    except reverse.TripsOverlap as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except SpecTooLarge as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"message": exc.message, "offender": exc.offender},
-        ) from exc
+        first = _window(conn, body.first, "第一趟")
+        second = _window(conn, body.second, "第二趟")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if second.depart_earliest <= first.depart_latest:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"「{second.label}」最早的出發日({second.depart_earliest})必須晚於"
+                f"「{first.label}」最晚的出發日({first.depart_latest})。"
+                "倒買法把兩趟的航段交叉綁在同一張票上,而同一張票必須依序使用。"
+            ),
+        )
+    keys = credentials.resolve(conn)
 
-    # 有價格可算的只有單程票,而它們需要的航線很少(四段,不是
-    # 幾千種組合),所以直接在這裡抓完 —— 不像單趟搜尋要拆成 warm / search 兩段。
-    pairs = sorted({(leg.origin, leg.destination) for g in groups for p in g for leg in p.legs})
-    dates = [leg.depart_date for g in groups for p in g for leg in p.legs]
-    months = cached.months_covering(dates)
+    # 要抓的航線與月份從**區間**推導,不是從已經選好的日期 —— 排名之前還不知道
+    # 會選哪幾天,而抓價本來就是整月一起抓的,所以多涵蓋幾天不多花呼叫數。
+    places = [home_codes, first.airports, second.airports]
+    pairs = sorted(
+        {(o, d) for a, b in ((0, 1), (1, 0), (0, 2), (2, 0))
+         for o in places[a] for d in places[b]}
+    )
+    months = cached.months_covering(
+        [w.depart_earliest for w in (first, second)]
+        + [w.depart_latest + timedelta(days=w.nights_max) for w in (first, second)]
+    )
 
     warnings: list[str] = []
     if body.warm:
@@ -476,6 +542,34 @@ def reverse_plans(
         conn, {code for pair in pairs for code in pair}
     )
 
+    def price(origin: str, destination: str, day: date) -> float | None:
+        point = lookup.get((origin, destination, day))
+        return point.price if point else None
+
+    try:
+        ranked = reverse.rank_combinations(
+            home_codes, first, second, price, limit=REVERSE_GROUP_LIMIT
+        )
+    except SpecTooLarge as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": exc.message, "offender": exc.offender},
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not ranked:
+        raise HTTPException(
+            status_code=400,
+            detail="這兩個區間排不出合法的組合(第二趟必須整個在第一趟之後)。",
+        )
+    if ranked[0].split_total is None:
+        warnings.append(
+            f"這幾個月({'、'.join(months)})的快取價不夠,湊不出完整總價。"
+            "這個資料源大約只有三個月的視野 —— 太遠的日期上游一列都沒有,"
+            "把行程往前挪通常就有價格了。"
+        )
+
     return {
         "warnings": warnings,
         "currency": settings.default_currency,
@@ -486,14 +580,21 @@ def reverse_plans(
         "route_pairs": len(pairs),
         "groups": [
             {
+                # 四段全拆單程的總價 —— 這是唯一整個買法都算得出來的數字,
+                # 也是判斷反向票值不值得的基準線。缺一段就是 None,絕不部分加總。
+                "split_total": combo.split_total,
+                "missing": [
+                    f"{leg.origin}→{leg.destination} {leg.day.isoformat()}"
+                    for leg in combo.missing
+                ],
                 "plans": [
                     _serialise_plan(plan, lookup, fetched, body, conn, siblings)
-                    for plan in group
-                ]
+                    for plan in combo.plans
+                ],
             }
-            for group in groups[:REVERSE_GROUP_LIMIT]
+            for combo in ranked
         ],
-        "group_count": len(groups),
+        "group_count": len(ranked),
     }
 
 

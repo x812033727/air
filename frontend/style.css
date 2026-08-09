@@ -881,3 +881,122 @@ a.chip { text-decoration: none; }
 }
 
 .switch input { width: 1rem; height: 1rem; accent-color: var(--airway); }
+
+/* ---- 總價 --------------------------------------------------------------- */
+
+/* 畫面上第一個看得到的數字。使用者回報「應該要有價格出現」時,這裡是空的 —— 
+   不是因為算錯,是因為預設日期落在上游沒有資料的月份。 */
+.total {
+  border: 1px solid var(--airway);
+  border-left-width: 3px;
+  border-radius: var(--radius);
+  background: var(--airway-soft);
+  padding: 1rem 1.2rem;
+  margin-bottom: 1rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.total__label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  color: var(--airway);
+}
+
+.total__price {
+  font-family: var(--mono);
+  font-size: 1.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  line-height: 1.2;
+}
+
+.total__price--none { font-size: 0.95rem; font-weight: 400; color: var(--boundary); }
+
+.total__note { font-size: 0.78rem; line-height: 1.6; color: var(--ink-soft); }
+
+/* ---- 地點搜尋 ----------------------------------------------------------- */
+
+.picked { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+
+.picked__empty { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-faint); }
+
+.chip--picked { border-color: var(--airway); color: var(--airway); }
+.chip__x { color: var(--ink-faint); font-size: 0.9rem; line-height: 1; }
+.chip--picked:hover .chip__x { color: var(--boundary); }
+
+.place__search {
+  width: 100%;
+  max-width: 26rem;
+  min-width: 0;
+}
+
+.place__found { display: grid; gap: 0.25rem; max-width: 26rem; }
+.place__found:empty { display: none; }
+
+.place__hit {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper);
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink);
+}
+
+.place__hit:hover { border-color: var(--airway); background: var(--airway-soft); }
+
+.place__codes {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--airway);
+  letter-spacing: 0.06em;
+}
+
+.place__country { font-size: 0.72rem; color: var(--ink-faint); margin-left: auto; }
+
+/* ---- 收起來的說明 ------------------------------------------------------- */
+
+.hero { display: block; padding: 1.5rem 0 1.25rem; }
+.hero__more { font-size: 0.85rem; margin-left: 0.4rem; white-space: nowrap; }
+
+.explain { margin-bottom: 1.1rem; }
+
+.explain > summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: var(--ink-soft);
+  list-style: none;
+  padding: 0.3rem 0;
+}
+
+.explain > summary::-webkit-details-marker { display: none; }
+.explain > summary::before { content: "＋ "; color: var(--ink-faint); }
+.explain[open] > summary::before { content: "− "; }
+.explain > summary:hover { color: var(--airway); }
+
+.explain__body {
+  border-left: 3px solid var(--rule);
+  padding: 0.2rem 0 0.2rem 1rem;
+  margin-top: 0.4rem;
+}
+
+.explain__body p { margin: 0 0 0.7rem; font-size: 0.85rem; line-height: 1.75; color: var(--ink-soft); }
+.explain__body p:last-child { margin-bottom: 0; }
+.explain__body strong { color: var(--ink); font-weight: 600; }
+
+.explain__diagram {
+  font-family: var(--mono);
+  font-size: 0.78rem !important;
+  line-height: 2 !important;
+}
+
+.explain__diagram b { color: var(--airway); }

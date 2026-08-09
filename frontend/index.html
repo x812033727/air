@@ -71,27 +71,14 @@
 
 <main>
 
-  <!-- 招牌元素:兩張交叉的票畫成兩條線,交叉的地方一眼就看得見。 -->
+  <!-- 手機上這裡原本堆了 752px 的開場白與裝飾圖,第一屏一個可以操作的東西都沒有,
+       送出鈕在 1,072px 之後。所以現在只留一行,其餘收進 details。 -->
   <section class="hero">
     <p class="hero__lede">
-      一年要去同一個地方兩次的話,買兩張普通來回票很少是最便宜的。
-      <strong>反向機票</strong>是把兩趟的四段航程,重新綁成兩張<strong>出發地對調</strong>的
-      來回票 —— 其中一張從外站起飛,而航空公司對外站出發的票常常便宜得多。
+      一年去同一個地方兩次的話,把四段航程綁成<strong>兩張出發地對調的來回票</strong>,
+      常常比買兩張普通來回便宜。
+      <a class="hero__more" href="#what">這是什麼?</a>
     </p>
-    <div class="hero__diagram" aria-hidden="true">
-      <div class="routeline routeline--demo">
-        <span class="node"></span>
-        <span class="seg seg--fly"><span class="seg__glyph">A1</span></span>
-        <span class="node"></span>
-        <span class="seg seg--surface"><span class="seg__glyph">另一張票</span></span>
-        <span class="node"></span>
-        <span class="seg seg--fly"><span class="seg__glyph">A2</span></span>
-        <span class="node"></span>
-      </div>
-      <div class="routeline__labels">
-        <span>台北</span><span>東京</span><span>大阪</span><span>台北</span>
-      </div>
-    </div>
   </section>
 
   <!-- 兩個模式共用。選了航空公司之後會變的只有連結,排名一個字都不動 —— 那條線
@@ -132,15 +119,29 @@
   <section class="panel" id="reverse-panel" aria-labelledby="reverse-heading">
     <h2 class="eyebrow" id="reverse-heading">兩趟旅行</h2>
 
-    <p class="reverse__intro">
-      同樣去兩次,買的不是兩張普通來回,而是<strong>兩張出發地對調的來回票</strong>:
-      A 票從台北起、B 票從外站起,四段航程交叉綁在這兩張票上。
-      省錢與便宜商務艙都來自 B 票的外站計價。
-      <strong>第二趟必須整個在第一趟之後</strong>,因為同一張票上的兩段必須依序使用;
-      兩張票也要<strong>同時買</strong>,所以這是「我確定兩趟都會去」換來的價差,
-      不是一個搜尋結果。<strong>傳統航空的旺季最有感</strong>,而廉航促銷常常還是更便宜,
-      所以下面的連結一定要點開比過再決定。
-    </p>
+    <details class="explain" id="what">
+      <summary>反向機票是什麼?為什麼要這樣買?</summary>
+      <div class="explain__body">
+        <p>
+          買的不是兩張普通來回,而是<strong>兩張出發地對調的來回票</strong>:
+          A 票從台北起、B 票從外站起,四段航程交叉綁在這兩張票上。
+          省錢與便宜商務艙都來自 B 票的外站計價。
+        </p>
+        <p>
+          <strong>第二趟必須整個在第一趟之後</strong>,因為同一張票上的兩段必須依序使用;
+          兩張票也要<strong>同時買</strong>,所以這是「我確定兩趟都會去」換來的價差,
+          不是一個搜尋結果。
+        </p>
+        <p>
+          <strong>傳統航空的旺季最有感</strong>,而廉航促銷常常還是更便宜 ——
+          實測 16 組來回票對兩張單程,有 4 組來回票反而比較貴,所以連結一定要點開比過。
+        </p>
+        <p class="explain__diagram" aria-hidden="true">
+          第一趟 <b>A1</b> 台北→東京 → <b>B1</b> 東京→台北<br>
+          第二趟 <b>B2</b> 台北→大阪 → <b>A2</b> 大阪→台北
+        </p>
+      </div>
+    </details>
 
     <form id="reverse-form">
       <div class="stopchain" id="reverse-chain"></div>

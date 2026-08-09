@@ -56,74 +56,84 @@ function el(tag, className, text) {
   return node;
 }
 
-function countrySelect(value, onChange) {
-  const select = el("select");
-  for (const country of state.countries) {
-    const option = el("option", null, `${country.name_zh} (${country.airport_count})`);
-    option.value = country.code;
-    if (country.code === value) option.selected = true;
-    select.append(option);
-  }
-  select.addEventListener("change", () => onChange(select.value));
-  return select;
-}
-
-/** A city and its airports. Tapping the city takes all of them; tapping a
- *  code takes just that one. Multi-airport cities are where substitution
- *  actually saves money, so both levels have to be reachable. */
-function cityGroup(city, selected, onToggle) {
-  const group = el("div", "citygroup");
-  const codes = city.airports.map((a) => a.code);
-  const all = codes.every((code) => selected.has(code));
-
-  const name = el("button", "citygroup__name", city.name);
-  name.type = "button";
-  name.setAttribute("aria-pressed", String(all));
-  name.addEventListener("click", () => onToggle(codes, !all));
-  group.append(name);
-
-  for (const airport of city.airports) {
-    const button = el("button", "citygroup__code", airport.code);
-    button.type = "button";
-    button.title = airport.name;
-    button.setAttribute("aria-pressed", String(selected.has(airport.code)));
-    button.addEventListener("click", () =>
-      onToggle([airport.code], !selected.has(airport.code))
-    );
-    group.append(button);
-  }
-  return group;
-}
-
+/** 打字找地方。取代原本「選國家 → 從前 12 個城市裡點」的挑法。
+ *
+ *  那個挑法是**死路**,不是不方便:日本 72 個可飛城市只列得出 12 個(`slice(0,12)`),
+ *  岡山、函館、石垣點不到,而上面的下拉寫著「日本 (77)」—— 看起來只是排在後面,
+ *  實際上沒有那個按鈕。要去的地方一旦不在前 12 名,這個工具對他就完全不能用。 */
 async function renderPlace(container, place, onChange) {
   container.replaceChildren();
 
-  const row = el("div", "stop__row");
-  row.append(countrySelect(place.country, async (code) => {
-    place.country = code;
-    place.selected = new Set();
-    await onChange();
-  }));
-  container.append(row);
+  const picked = el("div", "picked");
+  const search = el("input", "place__search");
+  search.type = "search";
+  search.placeholder = "打城市或代碼,例如 東京 / 福岡 / KIX";
+  search.autocomplete = "off";
+  const found = el("div", "place__found");
 
-  const cities = await airportsFor(place.country);
-  const picker = el("div", "stop__row");
-  // 只列前 12 個城市:超過這個數量的清單沒有人會讀,而機場上限本來就是 6。
-  for (const city of cities.slice(0, 12)) {
-    picker.append(
-      cityGroup(city, place.selected, (codes, on) => {
-        for (const code of codes) {
-          if (on) place.selected.add(code);
-          else place.selected.delete(code);
-        }
-        place.label = cities.find((c) =>
-          c.airports.some((a) => place.selected.has(a.code))
-        )?.name || place.label;
+  const paintPicked = () => {
+    picked.replaceChildren();
+    if (!place.selected.size) {
+      picked.append(el("span", "picked__empty", "還沒選"));
+      return;
+    }
+    for (const code of place.selected) {
+      const chip = el("button", "chip chip--picked", code);
+      chip.type = "button";
+      chip.title = "移除";
+      chip.append(el("span", "chip__x", "×"));
+      chip.addEventListener("click", () => {
+        place.selected.delete(code);
+        paintPicked();
         onChange();
-      })
-    );
-  }
-  container.append(picker);
+      });
+      picked.append(chip);
+    }
+  };
+
+  const addCity = (city) => {
+    // 選城市 = 把它的機場全部納入。多機場的城市正是省錢的來源,所以預設全收;
+    // 不想要的再按 × 拿掉。
+    for (const airport of city.airports) place.selected.add(airport.code);
+    place.label = city.name;
+    paintPicked();
+    onChange();
+  };
+
+  let timer = null;
+  search.addEventListener("input", () => {
+    const q = search.value.trim();
+    clearTimeout(timer);
+    if (!q) { found.replaceChildren(); return; }
+    timer = setTimeout(async () => {
+      let body;
+      try {
+        body = await api(`/api/ref/places?q=${encodeURIComponent(q)}&limit=8`);
+      } catch { return; }
+      found.replaceChildren();
+      if (!body.places.length) {
+        found.append(el("span", "picked__empty", `找不到「${q}」`));
+        return;
+      }
+      for (const city of body.places) {
+        const button = el("button", "place__hit");
+        button.type = "button";
+        button.append(el("b", null, city.name));
+        button.append(el("span", "place__codes",
+          city.airports.map((a) => a.code).join(" ")));
+        button.append(el("span", "place__country", city.country));
+        button.addEventListener("click", () => {
+          addCity(city);
+          search.value = "";
+          found.replaceChildren();
+        });
+        found.append(button);
+      }
+    }, 200);
+  });
+
+  paintPicked();
+  container.append(picked, search, found);
 }
 
 /* --------------------------------------------------------------- results */
@@ -454,29 +464,72 @@ async function wireAirlinePanel() {
  * ========================================================================== */
 
 const reverseState = {
-  home: { country: "TW", selected: new Set(["TPE", "TSA"]), label: "台北" },
+  home: { selected: new Set(["TPE", "TSA"]), label: "台北" },
   trips: [
-    { country: "JP", selected: new Set(), label: "", depart: "", back: "" },
-    { country: "JP", selected: new Set(), label: "", depart: "", back: "" },
+    { selected: new Set(), label: "", depart: "", nights: 5, flex: true },
+    { selected: new Set(), label: "", depart: "", nights: 5, flex: true },
   ],
 };
 
+/** 出發日 + 玩幾天,而不是兩個日期欄。
+ *
+ *  而且日期**刻意可以前後浮動**。上游快取是別人搜出來的,同一條航線某幾天有價
+ *  某幾天沒有,而使用者無從得知是哪幾天 —— 實測同一組行程只把第二趟從 10/20
+ *  挪到 10/06,算得出總價的機場組合就從 0 種變成 36 種。把「猜中有資料的那天」
+ *  丟給使用者,等於保證他看到一片空白。 */
 function tripDatesRow(trip, onChange) {
   const row = el("div", "stop__row");
-  for (const [key, label] of [["depart", "出發"], ["back", "回程"]]) {
-    const field = el("label", "field");
-    field.append(el("span", "field__label", label));
-    const input = el("input");
-    input.type = "date";
-    input.value = trip[key];
-    input.addEventListener("change", () => {
-      trip[key] = input.value;
-      onChange();
-    });
-    field.append(input);
-    row.append(field);
-  }
+
+  const departField = el("label", "field");
+  departField.append(el("span", "field__label", "大概哪天出發"));
+  const depart = el("input");
+  depart.type = "date";
+  depart.value = trip.depart;
+  depart.addEventListener("change", () => { trip.depart = depart.value; onChange(); });
+  departField.append(depart);
+
+  const nightsField = el("label", "field field--narrow");
+  nightsField.append(el("span", "field__label", "玩幾晚"));
+  const nights = el("input");
+  nights.type = "number";
+  nights.min = "1";
+  nights.max = "30";
+  nights.value = trip.nights;
+  nights.addEventListener("change", () => {
+    trip.nights = Math.max(1, Number(nights.value) || 1);
+    onChange();
+  });
+  nightsField.append(nights);
+
+  const flex = el("label", "switch");
+  const box = el("input");
+  box.type = "checkbox";
+  box.checked = trip.flex;
+  box.addEventListener("change", () => { trip.flex = box.checked; onChange(); });
+  flex.append(box, el("span", null, "前後幾天都可以"));
+
+  row.append(departField, nightsField, flex);
   return row;
+}
+
+/** 使用者填的「大概這天」變成送給後端的區間。
+ *  勾了浮動就前後各 4 天、天數 ±1;沒勾就是確切那天。 */
+function tripWindow(trip) {
+  const shift = (iso, days) => {
+    const d = new Date(iso + "T00:00:00");
+    d.setDate(d.getDate() + days);
+    return d.toISOString().slice(0, 10);
+  };
+  const span = trip.flex ? 4 : 0;
+  const wobble = trip.flex ? 1 : 0;
+  return {
+    codes: [...trip.selected],
+    label: trip.label,
+    depart_earliest: shift(trip.depart, -span),
+    depart_latest: shift(trip.depart, span),
+    nights_min: Math.max(1, trip.nights - wobble),
+    nights_max: trip.nights + wobble,
+  };
 }
 
 async function renderReversePlan() {
@@ -660,6 +713,30 @@ function referenceBlock(legs, currency) {
   return box;
 }
 
+/** 畫面上第一個數字:同樣這四段各自買單程要多少。
+ *
+ *  這是**唯一整組買法都算得出來的總價**,也是判斷反向票值不值得的基準線。
+ *  刻意不寫成「上限」:實測 16 組來回票對兩張單程,有 4 組來回票**比較貴**
+ *  (最高 1.117 倍,幾乎都是廉航 —— 廉航的來回票本來就是兩張單程黏起來)。
+ *  標成上限而使用者點進去發現更貴,錯的方向剛好是最糟的那個。 */
+function totalCard(group, currency) {
+  const card = el("div", "total");
+  if (group.split_total != null) {
+    card.append(el("div", "total__label", "同樣這四段,各自買單程"));
+    card.append(el("div", "total__price", money(group.split_total, currency)));
+    card.append(el("div", "total__note",
+      "反向票要比這個便宜才值得買 —— 下面兩張票的真價請點連結查。"));
+  } else {
+    card.append(el("div", "total__label", "算不出總價"));
+    card.append(el("div", "total__price total__price--none",
+      group.missing.length ? `缺 ${group.missing.join("、")}` : "缺資料"));
+    card.append(el("div", "total__note",
+      "這個資料源大約只有三個月的視野,太遠的日期上游一列都沒有。" +
+      "把行程往前挪,或勾「前後幾天都可以」,通常就有價格了。"));
+  }
+  return card;
+}
+
 function methodCard(plan, currency) {
   const card = el("div", `method${plan.method === "reverse" ? " method--reverse" : ""}`);
 
@@ -707,8 +784,8 @@ async function runReverse(event) {
     showNotice("還有地方沒選", "出發地和兩趟的目的地都要至少選一個機場。", "alert");
     return;
   }
-  if (!first.depart || !first.back || !second.depart || !second.back) {
-    showNotice("日期沒填完", "兩趟旅行的去程與回程日期都要填。", "alert");
+  if (!first.depart || !second.depart) {
+    showNotice("日期沒填完", "兩趟旅行都要給一個大概的出發日。", "alert");
     return;
   }
 
@@ -720,10 +797,8 @@ async function runReverse(event) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         home: [...reverseState.home.selected],
-        first: { codes: [...first.selected], depart: first.depart, back: first.back,
-                 label: first.label },
-        second: { codes: [...second.selected], depart: second.depart, back: second.back,
-                  label: second.label },
+        first: tripWindow(first),
+        second: tripWindow(second),
         try_both_orders: false,
         passengers: Number($("#rev-passengers").value) || 1,
         cabin: $("#rev-cabin").value,
@@ -742,14 +817,17 @@ async function runReverse(event) {
     // 其餘三種後端照樣算、測試照樣守著,想拿回來比較時只要改這一行。
     const plans = body.groups[0].plans.filter((plan) => plan.method === "reverse");
 
+    const group = body.groups[0];
     const list = $("#rev-list");
     list.replaceChildren();
+    list.append(totalCard(group, body.currency));
     for (const plan of plans) list.append(methodCard(plan, body.currency));
 
-    $("#rev-summary").textContent =
-      `${body.route_pairs} 條航線 · ${body.months.join("、")} · ` +
-      `這兩張票都按來回計價,而台灣出發的航線沒有來回快取資料,所以站內不比價 —— ` +
-      `價格請用每張票的連結各自查,下面的單程價只是參考基準。`;
+    const seq = group.plans[0]?.sequence || [];
+    $("#rev-summary").textContent = seq.length
+      ? `${seq.map((t) => `${t.label} ${t.depart.slice(5)}–${t.back.slice(5)}`).join(" · ")}` +
+        ` — 從 ${body.group_count} 種機場與日期組合裡挑最便宜的`
+      : `${body.route_pairs} 條航線 · ${body.months.join("、")}`;
     $("#reverse-results").hidden = false;
     $("#reverse-results").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (error) {
@@ -761,18 +839,18 @@ async function runReverse(event) {
 }
 
 async function initReverse() {
-  const start = new Date();
-  start.setDate(start.getDate() + 60);
+  // 預設刻意落在**有資料的視窗內**。上游快取只有大約三個月的視野(實測:
+  // 今天 8/09,TPE→NRT 在 9 月有 29 天有價、12 月 0 天),而舊的預設是
+  // +60 天與 +122 天 —— 第二趟正好在死區,所以第一屏永遠是空的。
   const iso = (d) => d.toISOString().slice(0, 10);
+  const at = (days) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    return iso(d);
+  };
   const [first, second] = reverseState.trips;
-
-  const a = new Date(start), aBack = new Date(start);
-  aBack.setDate(aBack.getDate() + 5);
-  const b = new Date(start), bBack = new Date(start);
-  b.setDate(b.getDate() + 62);
-  bBack.setDate(bBack.getDate() + 67);
-  first.depart = iso(a); first.back = iso(aBack);
-  second.depart = iso(b); second.back = iso(bBack);
+  first.depart = at(30);
+  second.depart = at(75);
 
   const jp = await airportsFor("JP");
   const tokyo = jp.find((c) => c.code === "TYO");
